@@ -18,3 +18,20 @@ exclude = '''
   )/
 )
 '''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "e2e: end-to-end tests requiring real dependencies",
+    "slow: tests that take more than 5 seconds",
+    "wallust: tests requiring wallust CLI",
+    "benchmark: performance benchmark tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:dbus.*",
+    "ignore::DeprecationWarning:gi.*",
+]
+addopts = "--strict-markers"

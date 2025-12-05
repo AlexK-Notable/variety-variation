@@ -1,0 +1,8 @@
+# Ignore fixture images (too large for git)
+wallpapers/*.jpg
+wallpapers/*.jpeg
+wallpapers/*.png
+wallpapers/*.webp
+
+# Keep the directory structure
+!wallpapers/.gitkeep

@@ -61,6 +61,7 @@ from variety.ThumbsManager import ThumbsManager
 from variety.Util import Util, _, debounce, on_gtk, throttle
 from variety.VarietyOptionParser import parse_options
 from variety.WelcomeDialog import WelcomeDialog
+from variety.smart_selection import SmartSelector, SelectionConfig, ImageIndexer
 from variety_lib import varietyconfig
 
 # fmt: off
@@ -311,6 +312,56 @@ class VarietyWindow(Gtk.Window):
 
         self.create_desktop_entry()
 
+    def _init_smart_selector(self):
+        """Initialize the Smart Selection Engine for weighted wallpaper selection."""
+        try:
+            # Database stored in config folder
+            db_path = os.path.join(self.config_folder, "smart_selection.db")
+
+            # Create config with defaults (TODO: load from options)
+            config = SelectionConfig(
+                image_cooldown_days=7.0,
+                source_cooldown_days=1.0,
+                favorite_boost=2.0,
+                new_image_boost=1.5,
+                enabled=True,
+            )
+
+            # Close existing selector if reloading config
+            if hasattr(self, 'smart_selector') and self.smart_selector:
+                try:
+                    self.smart_selector.close()
+                except Exception:
+                    pass
+
+            self.smart_selector = SmartSelector(db_path, config)
+
+            # Index favorites folder in background
+            def _index_favorites():
+                try:
+                    if self.options.favorites_folder and os.path.exists(self.options.favorites_folder):
+                        indexer = ImageIndexer(
+                            self.smart_selector.db,
+                            favorites_folder=self.options.favorites_folder
+                        )
+                        count = indexer.index_directory(
+                            self.options.favorites_folder,
+                            recursive=True
+                        )
+                        if count > 0:
+                            logger.info(lambda: f"Smart Selection: Indexed {count} favorites")
+                except Exception as e:
+                    logger.warning(lambda: f"Smart Selection: Failed to index favorites: {e}")
+
+            index_thread = threading.Thread(target=_index_favorites, daemon=True)
+            index_thread.start()
+
+            logger.info(lambda: "Smart Selection Engine initialized")
+
+        except Exception as e:
+            logger.warning(lambda: f"Smart Selection Engine failed to initialize: {e}")
+            self.smart_selector = None
+
     def register_clipboard(self):
         def clipboard_changed(clipboard, event):
             try:
@@ -428,6 +479,9 @@ class VarietyWindow(Gtk.Window):
 
         if Options.SourceType.FETCHED in [s[1] for s in self.options.sources if s[0]]:
             self.folders.append(self.options.fetched_folder)
+
+        # Initialize Smart Selection Engine
+        self._init_smart_selector()
 
         self.downloaders = []
         self.download_folder_size = None
@@ -1593,8 +1647,46 @@ class VarietyWindow(Gtk.Window):
         for album in self.albums:
             all_images.append(album["images"][0])
 
+        # Try Smart Selection if available
+        if hasattr(self, 'smart_selector') and self.smart_selector:
+            try:
+                # Index any new images we haven't seen before
+                self._smart_index_images(all_images)
+
+                # Use weighted selection
+                selected = self.smart_selector.select_images(count)
+                if selected:
+                    logger.debug(lambda: f"Smart Selection: Selected {len(selected)} images")
+                    return selected
+            except Exception as e:
+                logger.warning(lambda: f"Smart Selection failed, falling back to random: {e}")
+
+        # Fallback to random shuffle
         random.shuffle(all_images)
         return all_images[:count]
+
+    def _smart_index_images(self, images):
+        """Index images that aren't in the smart selection database yet."""
+        if not self.smart_selector:
+            return
+
+        try:
+            db = self.smart_selector.db
+            indexer = ImageIndexer(db, favorites_folder=self.options.favorites_folder)
+
+            indexed = 0
+            for img_path in images:
+                existing = db.get_image(img_path)
+                if not existing:
+                    record = indexer.index_image(img_path)
+                    if record:
+                        db.upsert_image(record)
+                        indexed += 1
+
+            if indexed > 0:
+                logger.debug(lambda: f"Smart Selection: Indexed {indexed} new images")
+        except Exception as e:
+            logger.warning(lambda: f"Smart Selection indexing failed: {e}")
 
     def on_indicator_scroll(self, indicator, steps, direction):
         if direction in (Gdk.ScrollDirection.DOWN, Gdk.ScrollDirection.UP):
@@ -1784,6 +1876,13 @@ class VarietyWindow(Gtk.Window):
             self.auto_changed = auto_changed
             self.last_change_time = time.time()
             self.set_wp_throttled(img)
+
+            # Record for Smart Selection (recency tracking)
+            if hasattr(self, 'smart_selector') and self.smart_selector:
+                try:
+                    self.smart_selector.record_shown(img)
+                except Exception as e:
+                    logger.debug(lambda: f"Smart Selection record_shown failed: {e}")
 
             # Unsplash API requires that we call their download endpoint
             # when setting the wallpaper, not when queueing it:
@@ -2233,6 +2332,14 @@ class VarietyWindow(Gtk.Window):
                     self.quotes_engine.quit()
             except Exception:
                 logger.exception(lambda: "Could not stop quotes engine")
+
+            try:
+                if hasattr(self, 'smart_selector') and self.smart_selector:
+                    logger.debug(lambda: "Closing Smart Selection Engine")
+                    self.smart_selector.close()
+                    self.smart_selector = None
+            except Exception:
+                logger.exception(lambda: "Could not close Smart Selection Engine")
 
             if self.options.clock_enabled or self.options.quotes_enabled:
                 self.options.clock_enabled = False
