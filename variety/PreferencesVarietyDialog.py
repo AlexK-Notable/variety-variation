@@ -49,7 +49,8 @@ random.seed()
 logger = logging.getLogger("variety")
 
 SLIDESHOW_PAGE_INDEX = 4
-DONATE_PAGE_INDEX = 10
+SMART_SELECTION_PAGE_INDEX = 7
+DONATE_PAGE_INDEX = 11
 
 
 class PreferencesVarietyDialog(PreferencesDialog):
@@ -332,6 +333,41 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 self.ui.quotes_sources_grid.attach(cb, i % 4, i // 4, 1, 1)
                 self.quotes_sources_checkboxes.append(cb)
 
+            # Smart Selection settings
+            self.ui.smart_selection_enabled.set_active(self.options.smart_selection_enabled)
+            self.ui.smart_image_cooldown.set_value(self.options.smart_image_cooldown_days)
+            self.ui.smart_source_cooldown.set_value(self.options.smart_source_cooldown_days)
+            self.ui.smart_favorite_boost.set_value(self.options.smart_favorite_boost)
+            self.ui.smart_new_boost.set_value(self.options.smart_new_boost)
+
+            decay_types = {"exponential": 0, "linear": 1, "step": 2}
+            self.ui.smart_decay_type.set_active(
+                decay_types.get(self.options.smart_decay_type, 0)
+            )
+
+            self.ui.smart_color_enabled.set_active(self.options.smart_color_enabled)
+
+            color_temps = {"warm": 0, "neutral": 1, "cool": 2, "adaptive": 3}
+            self.ui.smart_color_temperature.set_active(
+                color_temps.get(self.options.smart_color_temperature, 3)
+            )
+
+            self.ui.smart_color_similarity.set_value(self.options.smart_color_similarity)
+            self.ui.smart_time_adaptation.set_active(self.options.smart_time_adaptation)
+
+            # Update Smart Selection labels
+            self.update_smart_image_cooldown_label()
+            self.update_smart_source_cooldown_label()
+            self.update_smart_favorite_boost_label()
+            self.update_smart_new_boost_label()
+            self.update_smart_color_similarity_label()
+
+            # Update Smart Selection statistics
+            self.update_smart_selection_stats()
+
+            # Disable Phase 3 color controls (not yet implemented)
+            self._disable_phase3_color_controls()
+
             self.ui.tips_buffer.set_text(
                 "\n\n".join(
                     [
@@ -361,6 +397,13 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.on_wallpaper_display_mode_changed()
             self.update_clipboard_state()
             self.update_status_message()
+            self.on_smart_selection_enabled_toggled()
+            # Disabled until Phase 3 color controls are implemented
+            # self.on_smart_color_enabled_toggled()
+            # self.on_smart_color_temperature_changed()
+
+            # Connect Smart Selection widgets to auto-update preview
+            self._connect_smart_selection_preview_signals()
         finally:
             # To be sure we are completely loaded, pass via two hops: first delay, then idle_add:
             def _finish_loading():
@@ -1135,6 +1178,38 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.options.slideshow_zoom = max(0, min(1, float(self.ui.slideshow_zoom.get_value())))
             self.options.slideshow_pan = max(0, min(0.2, float(self.ui.slideshow_pan.get_value())))
 
+            # Smart Selection settings
+            self.options.smart_selection_enabled = self.ui.smart_selection_enabled.get_active()
+            self.options.smart_image_cooldown_days = max(
+                0, min(30, float(self.ui.smart_image_cooldown.get_value()))
+            )
+            self.options.smart_source_cooldown_days = max(
+                0, min(7, float(self.ui.smart_source_cooldown.get_value()))
+            )
+            self.options.smart_favorite_boost = max(
+                1.0, min(5.0, float(self.ui.smart_favorite_boost.get_value()))
+            )
+            self.options.smart_new_boost = max(
+                1.0, min(3.0, float(self.ui.smart_new_boost.get_value()))
+            )
+
+            decay_types = ["exponential", "linear", "step"]
+            decay_idx = self.ui.smart_decay_type.get_active()
+            if 0 <= decay_idx < len(decay_types):
+                self.options.smart_decay_type = decay_types[decay_idx]
+
+            self.options.smart_color_enabled = self.ui.smart_color_enabled.get_active()
+
+            color_temps = ["warm", "neutral", "cool", "adaptive"]
+            temp_idx = self.ui.smart_color_temperature.get_active()
+            if 0 <= temp_idx < len(color_temps):
+                self.options.smart_color_temperature = color_temps[temp_idx]
+
+            self.options.smart_color_similarity = max(
+                0, min(100, int(self.ui.smart_color_similarity.get_value()))
+            )
+            self.options.smart_time_adaptation = self.ui.smart_time_adaptation.get_active()
+
             self.options.write()
 
             if not self.parent.running:
@@ -1198,6 +1273,19 @@ class PreferencesVarietyDialog(PreferencesDialog):
         self.ui.lightness.set_sensitive(self.ui.lightness_enabled.get_active())
 
     def on_destroy(self, widget=None):
+        # Cancel all timers to prevent memory leak and callbacks on destroyed widgets
+        if hasattr(self, '_preview_refresh_timer') and self._preview_refresh_timer:
+            self._preview_refresh_timer.cancel()
+            self._preview_refresh_timer = None
+
+        if hasattr(self, 'show_timer') and self.show_timer:
+            self.show_timer.cancel()
+            self.show_timer = None
+
+        if hasattr(self, 'apply_timer') and self.apply_timer:
+            self.apply_timer.cancel()
+            self.apply_timer = None
+
         if hasattr(self, "dialog") and self.dialog:
             try:
                 self.dialog.destroy()
@@ -1310,3 +1398,380 @@ class PreferencesVarietyDialog(PreferencesDialog):
     def on_btn_slideshow_start_clicked(self, widget=None):
         self.apply()
         self.parent.on_start_slideshow()
+
+    # Smart Selection handlers
+
+    def on_smart_selection_enabled_toggled(self, widget=None):
+        """Toggle sensitivity of all Smart Selection controls."""
+        enabled = self.ui.smart_selection_enabled.get_active()
+        self.ui.smart_image_cooldown.set_sensitive(enabled)
+        self.ui.smart_source_cooldown.set_sensitive(enabled)
+        self.ui.smart_favorite_boost.set_sensitive(enabled)
+        self.ui.smart_new_boost.set_sensitive(enabled)
+        self.ui.smart_decay_type.set_sensitive(enabled)
+        self.ui.smart_color_enabled.set_sensitive(enabled)
+        # Color-aware controls depend on both main enable and color enable
+        self.on_smart_color_enabled_toggled()
+
+    def on_smart_color_enabled_toggled(self, widget=None):
+        """Toggle sensitivity of color-aware selection controls."""
+        main_enabled = self.ui.smart_selection_enabled.get_active()
+        color_enabled = self.ui.smart_color_enabled.get_active()
+        enabled = main_enabled and color_enabled
+        self.ui.smart_color_temperature.set_sensitive(enabled)
+        self.ui.smart_color_similarity.set_sensitive(enabled)
+        self.ui.smart_time_adaptation.set_sensitive(enabled)
+        # Time adaptation visibility depends on adaptive temperature
+        self.on_smart_color_temperature_changed()
+
+    def on_smart_color_temperature_changed(self, widget=None):
+        """Update visibility of time adaptation based on temperature mode."""
+        main_enabled = self.ui.smart_selection_enabled.get_active()
+        color_enabled = self.ui.smart_color_enabled.get_active()
+        # Time adaptation only makes sense when in "adaptive" mode
+        is_adaptive = self.ui.smart_color_temperature.get_active() == 3
+        self.ui.smart_time_adaptation.set_sensitive(
+            main_enabled and color_enabled and is_adaptive
+        )
+
+    def on_smart_image_cooldown_changed(self, widget=None):
+        """Update image cooldown label."""
+        self.update_smart_image_cooldown_label()
+
+    def on_smart_source_cooldown_changed(self, widget=None):
+        """Update source cooldown label."""
+        self.update_smart_source_cooldown_label()
+
+    def on_smart_favorite_boost_changed(self, widget=None):
+        """Update favorites boost label."""
+        self.update_smart_favorite_boost_label()
+
+    def on_smart_new_boost_changed(self, widget=None):
+        """Update new image boost label."""
+        self.update_smart_new_boost_label()
+
+    def on_smart_color_similarity_changed(self, widget=None):
+        """Update color similarity label."""
+        self.update_smart_color_similarity_label()
+
+    def update_smart_image_cooldown_label(self):
+        """Update the image cooldown label text."""
+        value = int(self.ui.smart_image_cooldown.get_value())
+        if value == 0:
+            self.ui.smart_image_cooldown_label.set_text(_("Disabled"))
+        elif value == 1:
+            self.ui.smart_image_cooldown_label.set_text(_("1 day"))
+        else:
+            self.ui.smart_image_cooldown_label.set_text(_("{} days").format(value))
+
+    def update_smart_source_cooldown_label(self):
+        """Update the source cooldown label text."""
+        value = int(self.ui.smart_source_cooldown.get_value())
+        if value == 0:
+            self.ui.smart_source_cooldown_label.set_text(_("Disabled"))
+        elif value == 1:
+            self.ui.smart_source_cooldown_label.set_text(_("1 day"))
+        else:
+            self.ui.smart_source_cooldown_label.set_text(_("{} days").format(value))
+
+    def update_smart_favorite_boost_label(self):
+        """Update the favorites boost label text."""
+        value = self.ui.smart_favorite_boost.get_value()
+        self.ui.smart_favorite_boost_label.set_text("{:.1f}x".format(value))
+
+    def update_smart_new_boost_label(self):
+        """Update the new image boost label text."""
+        value = self.ui.smart_new_boost.get_value()
+        self.ui.smart_new_boost_label.set_text("{:.1f}x".format(value))
+
+    def update_smart_color_similarity_label(self):
+        """Update the color similarity label text."""
+        value = int(self.ui.smart_color_similarity.get_value())
+        self.ui.smart_color_similarity_label.set_text("{}%".format(value))
+
+    def update_smart_selection_stats(self):
+        """Update the Smart Selection statistics labels."""
+        try:
+            if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+                stats = self.parent.smart_selector.get_statistics()
+                self.ui.smart_stats_indexed.set_text(
+                    _("Images indexed: {}    Sources: {}").format(
+                        stats.get('images_indexed', 0),
+                        stats.get('sources_count', 0)
+                    )
+                )
+                images = stats.get('images_indexed', 0)
+                palettes = stats.get('images_with_palettes', 0)
+                pct = int(100 * palettes / images) if images > 0 else 0
+                self.ui.smart_stats_palettes.set_text(
+                    _("Images with palettes: {} ({}%)").format(palettes, pct)
+                )
+                self.ui.smart_stats_selections.set_text(
+                    _("Total selections: {}    Unique shown: {}").format(
+                        stats.get('total_selections', 0),
+                        stats.get('unique_shown', 0)
+                    )
+                )
+            else:
+                self.ui.smart_stats_indexed.set_text(_("Images indexed: 0    Sources: 0"))
+                self.ui.smart_stats_palettes.set_text(_("Images with palettes: 0 (0%)"))
+                self.ui.smart_stats_selections.set_text(_("Total selections: 0    Unique shown: 0"))
+        except Exception:
+            logger.exception(lambda: "Error updating smart selection stats")
+
+    def _disable_phase3_color_controls(self):
+        """Disable color-related controls until Phase 3 is implemented."""
+        # Disable controls
+        self.ui.smart_color_enabled.set_sensitive(False)
+        self.ui.smart_color_temperature.set_sensitive(False)
+        self.ui.smart_color_similarity.set_sensitive(False)
+
+        # Set tooltips explaining why
+        coming_soon_tooltip = _("Color-aware selection coming in a future update")
+        self.ui.smart_color_enabled.set_tooltip_text(coming_soon_tooltip)
+        self.ui.smart_color_temperature.set_tooltip_text(coming_soon_tooltip)
+        self.ui.smart_color_similarity.set_tooltip_text(coming_soon_tooltip)
+
+        # Also disable the extract palettes button
+        if hasattr(self.ui, 'smart_extract_palettes'):
+            self.ui.smart_extract_palettes.set_sensitive(False)
+            self.ui.smart_extract_palettes.set_tooltip_text(coming_soon_tooltip)
+
+    def on_smart_rebuild_index_clicked(self, widget=None):
+        """Rebuild the Smart Selection image index."""
+        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+            def rebuild():
+                try:
+                    self.parent.smart_selector.rebuild_index()
+                    Util.add_mainloop_task(self.update_smart_selection_stats)
+                except Exception:
+                    logger.exception(lambda: "Error rebuilding smart selection index")
+
+            threading.Thread(target=rebuild, daemon=True).start()
+            self.parent.show_notification(_("Rebuilding index..."))
+
+    def on_smart_extract_palettes_clicked(self, widget=None):
+        """Extract color palettes for all indexed images."""
+        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+            def extract():
+                try:
+                    count = self.parent.smart_selector.extract_all_palettes()
+                    Util.add_mainloop_task(self.update_smart_selection_stats)
+                    self.parent.show_notification(
+                        _("Extracted {} palettes").format(count)
+                    )
+                except Exception:
+                    logger.exception(lambda: "Error extracting palettes")
+
+            threading.Thread(target=extract, daemon=True).start()
+            self.parent.show_notification(_("Extracting palettes..."))
+
+    def on_smart_clear_history_clicked(self, widget=None):
+        """Clear the Smart Selection history."""
+        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+            dialog = Gtk.MessageDialog(
+                self,
+                Gtk.DialogFlags.MODAL,
+                Gtk.MessageType.QUESTION,
+                Gtk.ButtonsType.YES_NO,
+                _("Clear all selection history?\n\n"
+                  "This will reset the view counts for all images.\n"
+                  "The image index will be preserved.")
+            )
+            dialog.set_title(_("Clear History"))
+            response = dialog.run()
+            dialog.destroy()
+
+            if response == Gtk.ResponseType.YES:
+                try:
+                    self.parent.smart_selector.clear_history()
+                    self.update_smart_selection_stats()
+                    self.parent.show_notification(_("Selection history cleared"))
+                except Exception:
+                    logger.exception(lambda: "Error clearing selection history")
+
+    def on_smart_preview_clicked(self, widget=None):
+        """Generate and display preview of wallpaper candidates."""
+        if not hasattr(self.parent, 'smart_selector') or not self.parent.smart_selector:
+            self.ui.smart_preview_status.set_text(_("Smart Selection not available"))
+            return
+
+        # Show loading state
+        self.ui.smart_preview_button.set_sensitive(False)
+        self.ui.smart_preview_spinner.set_visible(True)
+        self.ui.smart_preview_spinner.start()
+        self.ui.smart_preview_status.set_text(_("Loading preview..."))
+
+        # Clear existing thumbnails
+        flowbox = self.ui.smart_preview_flowbox
+        for child in flowbox.get_children():
+            flowbox.remove(child)
+
+        def _load_preview():
+            try:
+                candidates = self.parent.smart_selector.get_preview_candidates(count=40)
+
+                def _update_ui():
+                    self._populate_preview_flowbox(candidates)
+                    self.ui.smart_preview_spinner.stop()
+                    self.ui.smart_preview_spinner.set_visible(False)
+                    self.ui.smart_preview_button.set_sensitive(True)
+                    if candidates:
+                        self.ui.smart_preview_status.set_text(
+                            _("Showing top {} candidates (sorted by selection weight)").format(
+                                len(candidates)
+                            )
+                        )
+                    else:
+                        self.ui.smart_preview_status.set_text(
+                            _("No candidates found. Try rebuilding the index.")
+                        )
+
+                GObject.idle_add(_update_ui)
+
+            except Exception as e:
+                logger.exception(lambda: "Error loading preview")
+
+                def _show_error():
+                    self.ui.smart_preview_spinner.stop()
+                    self.ui.smart_preview_spinner.set_visible(False)
+                    self.ui.smart_preview_button.set_sensitive(True)
+                    self.ui.smart_preview_status.set_text(_("Error loading preview"))
+
+                GObject.idle_add(_show_error)
+
+        thread = threading.Thread(target=_load_preview, daemon=True)
+        thread.start()
+
+    def _populate_preview_flowbox(self, candidates):
+        """Populate the preview FlowBox with thumbnail images."""
+        flowbox = self.ui.smart_preview_flowbox
+        # Get thumbnail size from zoom slider (default 120)
+        thumb_size = int(self.ui.smart_preview_zoom_adj.get_value())
+
+        for candidate in candidates:
+            filepath = candidate['filepath']
+            weight = candidate.get('normalized_weight', 1.0)
+            is_favorite = candidate.get('is_favorite', False)
+            times_shown = candidate.get('times_shown', 0)
+
+            # Create container for thumbnail and info
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            vbox.set_margin_start(3)
+            vbox.set_margin_end(3)
+            vbox.set_margin_top(3)
+            vbox.set_margin_bottom(3)
+
+            # Create thumbnail image
+            try:
+                if os.path.exists(filepath):
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                        filepath, thumb_size, thumb_size, True
+                    )
+                    image = Gtk.Image.new_from_pixbuf(pixbuf)
+                else:
+                    image = Gtk.Image.new_from_icon_name(
+                        "image-missing", Gtk.IconSize.DIALOG
+                    )
+            except Exception:
+                image = Gtk.Image.new_from_icon_name(
+                    "image-missing", Gtk.IconSize.DIALOG
+                )
+
+            # Add frame around image
+            frame = Gtk.Frame()
+            frame.add(image)
+            vbox.pack_start(frame, False, False, 0)
+
+            # Weight bar (visual indicator)
+            weight_bar = Gtk.ProgressBar()
+            weight_bar.set_fraction(weight)
+            weight_bar.set_size_request(-1, 8)
+            vbox.pack_start(weight_bar, False, False, 0)
+
+            # Info label
+            info_parts = []
+            if is_favorite:
+                info_parts.append("★")
+            if times_shown > 0:
+                info_parts.append(_("{} views").format(times_shown))
+            else:
+                info_parts.append(_("new"))
+
+            info_label = Gtk.Label()
+            info_label.set_markup(
+                "<small>{}</small>".format(" · ".join(info_parts) if info_parts else "")
+            )
+            info_label.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+            vbox.pack_start(info_label, False, False, 0)
+
+            # Add tooltip with full path
+            filename = os.path.basename(filepath)
+            vbox.set_tooltip_text(
+                "{}\nWeight: {:.0%}".format(filename, weight)
+            )
+
+            vbox.show_all()
+            flowbox.add(vbox)
+
+    def on_smart_preview_zoom_changed(self, widget=None):
+        """Handle zoom slider change - update label and refresh thumbnails."""
+        zoom_value = int(self.ui.smart_preview_zoom_adj.get_value())
+        self.ui.smart_preview_zoom_label.set_text("{}px".format(zoom_value))
+        # Refresh preview with new thumbnail size
+        self._schedule_preview_refresh()
+
+    def _schedule_preview_refresh(self):
+        """Schedule a preview refresh after settings change.
+
+        Debounces rapid changes to avoid excessive refreshes.
+        """
+        if self.loading:
+            return
+
+        # Cancel any pending refresh
+        if hasattr(self, '_preview_refresh_timer') and self._preview_refresh_timer:
+            self._preview_refresh_timer.cancel()
+
+        # Schedule refresh after a short delay (debounce)
+        def _do_refresh():
+            Util.add_mainloop_task(self.on_smart_preview_clicked)
+
+        self._preview_refresh_timer = threading.Timer(0.5, _do_refresh)
+        self._preview_refresh_timer.start()
+
+    def _connect_smart_selection_preview_signals(self):
+        """Connect Smart Selection settings to auto-update the preview."""
+        # Connect value-changed signals for all Smart Selection controls
+        widgets_with_value_changed = [
+            'smart_image_cooldown',
+            'smart_source_cooldown',
+            'smart_favorite_boost',
+            'smart_new_boost',
+            'smart_color_similarity',
+        ]
+        for widget_name in widgets_with_value_changed:
+            widget = getattr(self.ui, widget_name, None)
+            if widget:
+                widget.connect('value-changed', lambda w: self._schedule_preview_refresh())
+
+        # Connect toggled signals for checkboxes
+        widgets_with_toggled = [
+            'smart_selection_enabled',
+            'smart_color_enabled',
+            'smart_time_adaptation',
+        ]
+        for widget_name in widgets_with_toggled:
+            widget = getattr(self.ui, widget_name, None)
+            if widget:
+                widget.connect('toggled', lambda w: self._schedule_preview_refresh())
+
+        # Connect changed signals for combo boxes
+        widgets_with_changed = [
+            'smart_decay_type',
+            'smart_color_temperature',
+        ]
+        for widget_name in widgets_with_changed:
+            widget = getattr(self.ui, widget_name, None)
+            if widget:
+                widget.connect('changed', lambda w: self._schedule_preview_refresh())
