@@ -318,14 +318,18 @@ class VarietyWindow(Gtk.Window):
             # Database stored in config folder
             db_path = os.path.join(self.config_folder, "smart_selection.db")
 
-            # Create config with defaults (TODO: load from options)
+            # Load config from user preferences
             config = SelectionConfig(
-                image_cooldown_days=7.0,
-                source_cooldown_days=1.0,
-                favorite_boost=2.0,
-                new_image_boost=1.5,
-                enabled=True,
+                image_cooldown_days=getattr(self.options, 'smart_image_cooldown_days', 7.0),
+                source_cooldown_days=getattr(self.options, 'smart_source_cooldown_days', 1.0),
+                favorite_boost=getattr(self.options, 'smart_favorite_boost', 2.0),
+                new_image_boost=getattr(self.options, 'smart_new_boost', 1.5),
+                enabled=getattr(self.options, 'smart_selection_enabled', True),
+                recency_decay=getattr(self.options, 'smart_decay_type', 'exponential'),
             )
+
+            # Enable palette extraction if color-aware selection is enabled
+            enable_palette_extraction = getattr(self.options, 'smart_color_enabled', False)
 
             # Close existing selector if reloading config
             if hasattr(self, 'smart_selector') and self.smart_selector:
@@ -334,26 +338,71 @@ class VarietyWindow(Gtk.Window):
                 except Exception:
                     pass
 
-            self.smart_selector = SmartSelector(db_path, config)
+            self.smart_selector = SmartSelector(
+                db_path, config,
+                enable_palette_extraction=enable_palette_extraction
+            )
 
-            # Index favorites folder in background
-            def _index_favorites():
+            # Index all enabled source folders in background
+            def _index_all_sources():
                 try:
-                    if self.options.favorites_folder and os.path.exists(self.options.favorites_folder):
-                        indexer = ImageIndexer(
-                            self.smart_selector.db,
-                            favorites_folder=self.options.favorites_folder
-                        )
-                        count = indexer.index_directory(
-                            self.options.favorites_folder,
-                            recursive=True
-                        )
-                        if count > 0:
-                            logger.info(lambda: f"Smart Selection: Indexed {count} favorites")
-                except Exception as e:
-                    logger.warning(lambda: f"Smart Selection: Failed to index favorites: {e}")
+                    indexer = ImageIndexer(
+                        self.smart_selector.db,
+                        favorites_folder=self.options.favorites_folder
+                    )
 
-            index_thread = threading.Thread(target=_index_favorites, daemon=True)
+                    # Collect all folders to index
+                    folders_to_index = []
+
+                    # Favorites folder
+                    if self.options.favorites_folder and os.path.exists(self.options.favorites_folder):
+                        folders_to_index.append(self.options.favorites_folder)
+
+                    # Downloaded folder
+                    if hasattr(self, 'real_download_folder') and self.real_download_folder:
+                        if os.path.exists(self.real_download_folder):
+                            folders_to_index.append(self.real_download_folder)
+                    elif self.options.download_folder and os.path.exists(self.options.download_folder):
+                        folders_to_index.append(self.options.download_folder)
+
+                    # Fetched folder
+                    if self.options.fetched_folder and os.path.exists(self.options.fetched_folder):
+                        folders_to_index.append(self.options.fetched_folder)
+
+                    # User-configured folders from sources
+                    for source in self.options.sources:
+                        enabled, source_type, location = source
+                        if enabled and source_type == Options.SourceType.FOLDER:
+                            folder = os.path.expanduser(location)
+                            if os.path.exists(folder):
+                                folders_to_index.append(folder)
+
+                    # Remove duplicates while preserving order
+                    seen = set()
+                    unique_folders = []
+                    for folder in folders_to_index:
+                        normalized = os.path.normpath(folder)
+                        if normalized not in seen:
+                            seen.add(normalized)
+                            unique_folders.append(folder)
+                    folders_to_index = unique_folders
+
+                    # Index each folder
+                    total_indexed = 0
+                    for folder in folders_to_index:
+                        try:
+                            count = indexer.index_directory(folder, recursive=True)
+                            total_indexed += count
+                        except Exception as e:
+                            logger.warning(lambda: f"Smart Selection: Failed to index {folder}: {e}")
+
+                    if total_indexed > 0:
+                        logger.info(lambda: f"Smart Selection: Indexed {total_indexed} images from {len(folders_to_index)} folders")
+
+                except Exception as e:
+                    logger.warning(lambda: f"Smart Selection: Failed to index sources: {e}")
+
+            index_thread = threading.Thread(target=_index_all_sources, daemon=True)
             index_thread.start()
 
             logger.info(lambda: "Smart Selection Engine initialized")

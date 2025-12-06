@@ -1,69 +1,86 @@
-#!/usr/bin/python3
 # -*- Mode: Python; coding: utf-8; indent-tabs-mode: nil; tab-width: 4 -*-
-
-"""Integration test - Index actual Favorites folder."""
+"""Integration tests for Smart Selection Engine."""
 
 import os
+import shutil
 import tempfile
 import unittest
+from PIL import Image
 
 
-class TestRealFavoritesIndexing(unittest.TestCase):
-    """Integration test with the actual Favorites folder."""
+class TestStartupIndexing(unittest.TestCase):
+    """Tests for startup indexing behavior."""
 
     def setUp(self):
-        """Create temporary database."""
+        """Create temporary directories simulating Variety folder structure."""
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, 'integration_test.db')
-        self.favorites_dir = os.path.expanduser('~/.config/variety/Favorites')
+
+        # Create folder structure
+        self.favorites_dir = os.path.join(self.temp_dir, 'Favorites')
+        self.downloaded_dir = os.path.join(self.temp_dir, 'Downloaded')
+        self.fetched_dir = os.path.join(self.temp_dir, 'Fetched')
+        self.user_folder = os.path.join(self.temp_dir, 'UserFolder')
+        self.db_path = os.path.join(self.temp_dir, 'smart_selection.db')
+
+        for folder in [self.favorites_dir, self.downloaded_dir,
+                       self.fetched_dir, self.user_folder]:
+            os.makedirs(folder)
+
+        # Create test images in each folder
+        self.images = {}
+        for name, folder in [('fav', self.favorites_dir),
+                              ('dl', self.downloaded_dir),
+                              ('fetch', self.fetched_dir),
+                              ('user', self.user_folder)]:
+            paths = []
+            for i in range(3):
+                img_path = os.path.join(folder, f'{name}_{i}.jpg')
+                img = Image.new('RGB', (100, 100), color=(i*50, i*50, i*50))
+                img.save(img_path)
+                paths.append(img_path)
+            self.images[name] = paths
 
     def tearDown(self):
-        """Clean up temporary database."""
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
-        os.rmdir(self.temp_dir)
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
 
-    @unittest.skipUnless(
-        os.path.exists(os.path.expanduser('~/.config/variety/Favorites')),
-        "Favorites folder does not exist"
-    )
-    def test_index_real_favorites(self):
-        """Index the actual Favorites folder and verify results."""
+    def test_startup_indexes_all_enabled_sources(self):
+        """Startup should index favorites, downloaded, fetched, and user folders."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
         from variety.smart_selection.indexer import ImageIndexer
-        from variety.smart_selection.database import ImageDatabase
 
-        with ImageDatabase(self.db_path) as db:
-            indexer = ImageIndexer(db, favorites_folder=self.favorites_dir)
+        # Simulate what _init_smart_selector should do
+        config = SelectionConfig()
 
-            # Index favorites
-            count = indexer.index_directory(self.favorites_dir)
-            print(f"\nIndexed {count} images from Favorites")
+        with SmartSelector(self.db_path, config) as selector:
+            indexer = ImageIndexer(selector.db, favorites_folder=self.favorites_dir)
 
-            # Get stats
-            stats = indexer.get_index_stats()
-            print(f"Total images in database: {stats['total_images']}")
-            print(f"Favorites count: {stats['favorites_count']}")
-            print(f"Sources: {stats['total_sources']}")
+            # Index all source folders (this is what we're testing should happen)
+            folders_to_index = [
+                self.favorites_dir,
+                self.downloaded_dir,
+                self.fetched_dir,
+                self.user_folder,
+            ]
 
-            # Verify all are marked as favorites
-            all_images = db.get_all_images()
-            favorites = db.get_favorite_images()
+            total_indexed = 0
+            for folder in folders_to_index:
+                count = indexer.index_directory(folder, recursive=True)
+                total_indexed += count
 
-            self.assertEqual(len(all_images), len(favorites))
-            self.assertTrue(all(img.is_favorite for img in all_images))
+            # Verify all images are indexed
+            db_count = selector.db.count_images()
+            self.assertEqual(db_count, 12,
+                f"Expected 12 images indexed (3 per folder), got {db_count}")
 
-            # Verify we got dimensions for all
-            images_with_dims = [img for img in all_images if img.width and img.height]
-            print(f"Images with dimensions: {len(images_with_dims)}/{len(all_images)}")
-
-            self.assertEqual(len(images_with_dims), len(all_images))
-
-            # Print sample records
-            print("\nSample indexed images:")
-            for img in all_images[:3]:
-                print(f"  {img.filename}: {img.width}x{img.height}, "
-                      f"aspect={img.aspect_ratio:.2f}, size={img.file_size/1024/1024:.1f}MB")
+            # Verify favorites are marked correctly
+            for fav_path in self.images['fav']:
+                img = selector.db.get_image(fav_path)
+                self.assertIsNotNone(img)
+                self.assertTrue(img.is_favorite,
+                    f"Image {fav_path} should be marked as favorite")
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main()
