@@ -82,5 +82,41 @@ class TestStartupIndexing(unittest.TestCase):
                     f"Image {fav_path} should be marked as favorite")
 
 
+class TestOnTheFlyIndexing(unittest.TestCase):
+    """Tests for indexing images when they are shown."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+        self.images_dir = os.path.join(self.temp_dir, 'images')
+        os.makedirs(self.images_dir)
+
+        # Create a test image
+        self.test_image = os.path.join(self.images_dir, 'test.jpg')
+        img = Image.new('RGB', (100, 100))
+        img.save(self.test_image)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_record_shown_indexes_unknown_image(self):
+        """record_shown should index an image if it's not in the database."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Image is not in database yet
+            img = selector.db.get_image(self.test_image)
+            self.assertIsNone(img, "Image should not be in database yet")
+
+            # Call record_shown (simulates wallpaper being set)
+            selector.record_shown(self.test_image)
+
+            # Image should now be in database
+            img = selector.db.get_image(self.test_image)
+            self.assertIsNotNone(img, "Image should be indexed after record_shown")
+            self.assertEqual(img.times_shown, 1)
+
+
 if __name__ == '__main__':
     unittest.main()
