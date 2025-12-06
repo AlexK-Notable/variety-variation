@@ -439,5 +439,207 @@ class TestDatabaseContextManager(unittest.TestCase):
             self.assertIsNotNone(result)
 
 
+class TestDatabaseThreadSafety(unittest.TestCase):
+    """Tests for thread-safe database operations."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_concurrent_inserts_are_thread_safe(self):
+        """Multiple threads can insert records without data corruption."""
+        import threading
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import ImageRecord
+
+        db = ImageDatabase(self.db_path)
+        errors = []
+        num_threads = 10
+        inserts_per_thread = 20
+
+        def insert_records(thread_id):
+            try:
+                for i in range(inserts_per_thread):
+                    record = ImageRecord(
+                        filepath=f'/thread_{thread_id}_image_{i}.jpg',
+                        filename=f'thread_{thread_id}_image_{i}.jpg',
+                    )
+                    db.insert_image(record)
+            except Exception as e:
+                errors.append((thread_id, e))
+
+        threads = [
+            threading.Thread(target=insert_records, args=(i,))
+            for i in range(num_threads)
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        db.close()
+
+        # Should have no errors
+        self.assertEqual(errors, [], f"Thread errors occurred: {errors}")
+
+        # Verify all records were inserted
+        db2 = ImageDatabase(self.db_path)
+        count = db2.count_images()
+        db2.close()
+        expected = num_threads * inserts_per_thread
+        self.assertEqual(count, expected,
+                        f"Expected {expected} images, got {count}")
+
+    def test_concurrent_reads_and_writes_are_thread_safe(self):
+        """Concurrent read and write operations don't corrupt data."""
+        import threading
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import ImageRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Pre-populate with some data
+        for i in range(50):
+            db.insert_image(ImageRecord(
+                filepath=f'/initial_{i}.jpg',
+                filename=f'initial_{i}.jpg',
+            ))
+
+        errors = []
+        read_results = []
+
+        def writer(writer_id):
+            try:
+                for i in range(20):
+                    record = ImageRecord(
+                        filepath=f'/writer_{writer_id}_image_{i}.jpg',
+                        filename=f'writer_{writer_id}_image_{i}.jpg',
+                    )
+                    db.insert_image(record)
+                    time.sleep(0.001)  # Small delay to interleave operations
+            except Exception as e:
+                errors.append(('writer', writer_id, e))
+
+        def reader(reader_id):
+            try:
+                for _ in range(30):
+                    images = db.get_all_images()
+                    read_results.append(len(images))
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(('reader', reader_id, e))
+
+        # Create writer and reader threads
+        threads = []
+        for i in range(3):
+            threads.append(threading.Thread(target=writer, args=(i,)))
+        for i in range(3):
+            threads.append(threading.Thread(target=reader, args=(i,)))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        db.close()
+
+        # Should have no errors
+        self.assertEqual(errors, [], f"Thread errors occurred: {errors}")
+
+        # All reads should have returned valid counts
+        self.assertTrue(all(r >= 50 for r in read_results),
+                       "Read results should be >= initial count")
+
+    def test_record_shown_is_thread_safe(self):
+        """Concurrent record_shown calls update correctly."""
+        import threading
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import ImageRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Create a single image
+        db.insert_image(ImageRecord(
+            filepath='/test_image.jpg',
+            filename='test_image.jpg',
+        ))
+
+        errors = []
+        num_threads = 10
+        updates_per_thread = 10
+
+        def update_shown(thread_id):
+            try:
+                for _ in range(updates_per_thread):
+                    db.record_image_shown('/test_image.jpg')
+            except Exception as e:
+                errors.append((thread_id, e))
+
+        threads = [
+            threading.Thread(target=update_shown, args=(i,))
+            for i in range(num_threads)
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Verify times_shown is correct
+        image = db.get_image('/test_image.jpg')
+        db.close()
+
+        self.assertEqual(errors, [], f"Thread errors occurred: {errors}")
+
+        expected = num_threads * updates_per_thread
+        self.assertEqual(image.times_shown, expected,
+                        f"Expected times_shown={expected}, got {image.times_shown}")
+
+
+class TestDatabaseResilience(unittest.TestCase):
+    """Tests for database crash resilience and durability."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_wal_mode_enabled(self):
+        """Database uses WAL mode for crash resilience.
+
+        WAL (Write-Ahead Logging) mode provides:
+        - Better crash recovery
+        - Improved concurrent read/write performance
+        - Reduced risk of database corruption
+        """
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        db = ImageDatabase(self.db_path)
+        db.close()
+
+        # Check journal mode
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute("PRAGMA journal_mode")
+        mode = cursor.fetchone()[0]
+        conn.close()
+
+        self.assertEqual(mode.lower(), 'wal',
+                        f"Expected WAL mode, got {mode}")
+
+
 if __name__ == '__main__':
     unittest.main()

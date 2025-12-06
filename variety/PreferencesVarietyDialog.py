@@ -1537,6 +1537,14 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.ui.smart_extract_palettes.set_sensitive(False)
             self.ui.smart_extract_palettes.set_tooltip_text(coming_soon_tooltip)
 
+        # Hide time adaptation (not implemented)
+        if hasattr(self.ui, 'smart_time_adaptation'):
+            self.ui.smart_time_adaptation.set_visible(False)
+        if hasattr(self.ui, 'smart_time_description'):
+            self.ui.smart_time_description.set_visible(False)
+        if hasattr(self.ui, 'smart_time_label'):
+            self.ui.smart_time_label.set_visible(False)
+
     def on_smart_rebuild_index_clicked(self, widget=None):
         """Rebuild the Smart Selection image index."""
         if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:

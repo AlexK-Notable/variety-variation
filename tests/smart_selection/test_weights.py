@@ -327,5 +327,103 @@ class TestWeightDisabled(unittest.TestCase):
         self.assertEqual(weight, 1.0)
 
 
+class TestNegativeTimeGuard(unittest.TestCase):
+    """Tests for handling backward clock jumps (negative elapsed time)."""
+
+    def test_future_timestamp_handled_gracefully(self):
+        """Image with future timestamp (clock jumped back) returns valid factor.
+
+        If system clock jumps backward, last_shown_at could be in the "future"
+        relative to current time. This must not produce negative weights or
+        cause math errors.
+        """
+        from variety.smart_selection.weights import recency_factor
+
+        now = int(time.time())
+        future_timestamp = now + (24 * 60 * 60)  # 1 day in future
+
+        factor = recency_factor(last_shown_at=future_timestamp, cooldown_days=7)
+
+        # Should return a valid factor (clamped to just-shown behavior)
+        self.assertGreaterEqual(factor, 0.0)
+        self.assertLessEqual(factor, 1.0)
+
+    def test_negative_elapsed_time_returns_minimum_factor(self):
+        """Negative elapsed time (future timestamp) returns factor close to 0.
+
+        When elapsed_seconds would be negative, the image should be treated
+        as "just shown" (minimum factor) rather than causing math errors.
+        """
+        from variety.smart_selection.weights import recency_factor
+
+        now = int(time.time())
+        far_future = now + (30 * 24 * 60 * 60)  # 30 days in future
+
+        factor = recency_factor(last_shown_at=far_future, cooldown_days=7)
+
+        # Should be treated as just-shown (very low factor)
+        self.assertLess(factor, 0.1)
+
+
+class TestMinimumWeightFloor(unittest.TestCase):
+    """Tests for minimum weight floor to prevent zero-weight collapse."""
+
+    def test_weight_never_zero(self):
+        """Combined weight should never be exactly zero.
+
+        When all factors multiply to zero, a minimum floor should be applied
+        to prevent the selection algorithm from degenerating to uniform random.
+        """
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        # Worst case: just shown, source just used, step decay (returns 0)
+        config = SelectionConfig(
+            image_cooldown_days=7,
+            source_cooldown_days=1,
+            recency_decay='step',  # Returns exactly 0 before cooldown
+        )
+        now = int(time.time())
+
+        image = ImageRecord(
+            filepath='/test/worst.jpg',
+            filename='worst.jpg',
+            is_favorite=False,
+            times_shown=100,
+            last_shown_at=now,
+        )
+
+        weight = calculate_weight(image, source_last_shown_at=now, config=config)
+
+        # Weight should be positive (minimum floor applied)
+        self.assertGreater(weight, 0)
+
+    def test_weight_is_finite(self):
+        """Weight should never be NaN or infinite."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord
+        from variety.smart_selection.config import SelectionConfig
+        import math
+
+        config = SelectionConfig(
+            favorite_boost=1000.0,  # Extreme boost
+            new_image_boost=1000.0,
+        )
+
+        image = ImageRecord(
+            filepath='/test/boosted.jpg',
+            filename='boosted.jpg',
+            is_favorite=True,
+            times_shown=0,
+            last_shown_at=None,
+        )
+
+        weight = calculate_weight(image, source_last_shown_at=None, config=config)
+
+        self.assertTrue(math.isfinite(weight))
+        self.assertGreater(weight, 0)
+
+
 if __name__ == '__main__':
     unittest.main()

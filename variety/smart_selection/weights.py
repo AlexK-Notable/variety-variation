@@ -40,6 +40,11 @@ def recency_factor(
     elapsed_seconds = now - last_shown_at
     cooldown_seconds = cooldown_days * 24 * 60 * 60
 
+    # Guard against negative elapsed time (clock jumped backward)
+    # Treat as "just shown" to avoid math errors
+    if elapsed_seconds < 0:
+        elapsed_seconds = 0
+
     # Past cooldown
     if elapsed_seconds >= cooldown_seconds:
         return 1.0
@@ -147,5 +152,6 @@ def calculate_weight(
     fav_boost = favorite_boost(image.is_favorite, config.favorite_boost)
     new_boost = new_image_boost(image.times_shown, config.new_image_boost)
 
-    # Combine multiplicatively
-    return recency * source * fav_boost * new_boost
+    # Combine multiplicatively with minimum floor to prevent zero collapse
+    weight = recency * source * fav_boost * new_boost
+    return max(weight, 1e-6)

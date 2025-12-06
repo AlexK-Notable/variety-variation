@@ -637,5 +637,315 @@ class TestColorAwareSelection(unittest.TestCase):
             self.assertEqual(results[0], self.warm_image)
 
 
+class TestPreviewCandidates(unittest.TestCase):
+    """Tests for get_preview_candidates method."""
+
+    def setUp(self):
+        """Create temporary directory and test images."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+        # Create test images
+        self.images = []
+        for i in range(5):
+            img_path = os.path.join(self.temp_dir, f'image_{i}.png')
+            img = Image.new('RGB', (100, 100), color=(i * 50, i * 50, i * 50))
+            img.save(img_path)
+            self.images.append(img_path)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_get_preview_candidates_returns_list(self):
+        """get_preview_candidates returns a list of dicts."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.temp_dir)
+
+            candidates = selector.get_preview_candidates(count=10)
+            self.assertIsInstance(candidates, list)
+
+    def test_get_preview_candidates_contains_expected_keys(self):
+        """Each candidate dict contains expected keys."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.temp_dir)
+
+            candidates = selector.get_preview_candidates(count=10)
+            self.assertGreater(len(candidates), 0)
+
+            expected_keys = ['filepath', 'filename', 'weight', 'is_favorite',
+                            'times_shown', 'source_id', 'normalized_weight']
+            for candidate in candidates:
+                for key in expected_keys:
+                    self.assertIn(key, candidate, f"Missing key: {key}")
+
+    def test_get_preview_candidates_respects_count(self):
+        """get_preview_candidates returns at most count candidates."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.temp_dir)
+
+            # Request fewer than available
+            candidates = selector.get_preview_candidates(count=2)
+            self.assertLessEqual(len(candidates), 2)
+
+    def test_get_preview_candidates_sorted_by_weight(self):
+        """Candidates are sorted by weight in descending order."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.temp_dir)
+
+            candidates = selector.get_preview_candidates(count=10)
+            self.assertGreater(len(candidates), 1)
+
+            # Weights should be in descending order
+            weights = [c['weight'] for c in candidates]
+            self.assertEqual(weights, sorted(weights, reverse=True))
+
+
+class TestWeightedSelectionFloatPrecision(unittest.TestCase):
+    """Tests for floating point precision in weighted selection."""
+
+    def setUp(self):
+        """Create temporary directory with test images."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+        self.images_dir = os.path.join(self.temp_dir, 'images')
+        os.makedirs(self.images_dir)
+
+        # Create actual image files for float precision tests
+        self.image_paths = []
+        for i in range(5):  # Create 5 for the largest test
+            img_path = os.path.join(self.images_dir, f'img{i}.jpg')
+            img = Image.new('RGB', (100, 100), color=(i * 40, i * 40, i * 40))
+            img.save(img_path)
+            self.image_paths.append(img_path)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_selection_handles_float_precision_edge_case(self):
+        """Selection must work when random value equals total_weight.
+
+        Due to floating point precision, when random.uniform(0, total_weight)
+        returns a value very close to total_weight, the cumulative sum may never
+        reach that value, causing the loop to fail to select any index.
+
+        This test uses mocking to force the edge case and verify correct handling.
+        """
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.models import ImageRecord
+        from unittest.mock import patch
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Insert test images using real paths
+            for i in range(3):
+                selector.db.insert_image(ImageRecord(
+                    filepath=self.image_paths[i],
+                    filename=os.path.basename(self.image_paths[i]),
+                    times_shown=0))
+
+            # Mock random.uniform to return exactly the total_weight
+            # This triggers the floating point precision edge case
+            with patch('variety.smart_selection.selector.random.uniform') as mock_uniform:
+                # The weights sum to some value, we return that exact value
+                # which could cause the loop to never hit r <= cumulative
+                def return_max_weight(low, high):
+                    return high  # Return exactly total_weight
+
+                mock_uniform.side_effect = return_max_weight
+
+                # This should NOT raise an error or return empty
+                # Even when r == total_weight, we should select the last item
+                results = selector.select_images(count=1)
+
+                self.assertEqual(len(results), 1,
+                    "Must select exactly 1 image even with edge case float values")
+
+    def test_selection_handles_accumulated_float_error(self):
+        """Selection handles accumulated float error in cumulative sum.
+
+        When summing many floating point weights, the cumulative sum may
+        differ slightly from the expected total due to accumulated errors.
+        This can cause r <= cumulative to never be true even when r equals
+        the pre-calculated total_weight.
+
+        The fix should ensure the last element is always selected when
+        the loop completes without finding a match.
+        """
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.models import ImageRecord
+        from unittest.mock import patch, MagicMock
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Insert test images using real paths
+            for i in range(3):
+                selector.db.insert_image(ImageRecord(
+                    filepath=self.image_paths[i],
+                    filename=os.path.basename(self.image_paths[i]),
+                    times_shown=0))
+
+            # Patch calculate_weight to return specific values that
+            # will cause float precision issues when accumulated
+            with patch('variety.smart_selection.selector.calculate_weight') as mock_weight:
+                # Use values that cause float precision issues when summed
+                # For example, 0.1 + 0.1 + 0.1 != 0.3 in float
+                mock_weight.return_value = 0.1
+
+                # Now patch random.uniform to return a value slightly greater
+                # than what cumulative sum can reach (simulating the bug)
+                with patch('variety.smart_selection.selector.random.uniform') as mock_uniform:
+                    # 0.1 + 0.1 + 0.1 in float might be 0.30000000000000004
+                    # but 3 * 0.1 = 0.30000000000000004 as well
+                    # Let's force a value that definitely exceeds cumulative
+                    def return_slightly_more(low, high):
+                        # Return a value that's higher than float sum can reach
+                        return high + 1e-10  # Tiny bit more than total
+
+                    mock_uniform.side_effect = return_slightly_more
+
+                    # The current buggy code will return an incorrect result
+                    # because idx will stay at 0 when r > cumulative for all items
+                    results = selector.select_images(count=1)
+
+                    # Verify we got a result (the fix ensures we always select something)
+                    self.assertEqual(len(results), 1,
+                        "Must select 1 image even with float precision edge case")
+
+    def test_selection_handles_tiny_float_differences(self):
+        """Selection handles cases where float differences are very small.
+
+        Weights that differ by less than float epsilon can cause issues
+        in cumulative comparisons.
+        """
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.models import ImageRecord
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Insert test images using real paths
+            for i in range(5):
+                selector.db.insert_image(ImageRecord(
+                    filepath=self.image_paths[i],
+                    filename=os.path.basename(self.image_paths[i]),
+                    times_shown=0))
+
+            # Run many selections to check for any edge cases
+            for _ in range(100):
+                results = selector.select_images(count=1)
+                self.assertEqual(len(results), 1,
+                    "Must always select exactly 1 image")
+                self.assertIn(results[0], self.image_paths,
+                    "Selected image must be a valid path")
+
+
+class TestFileExistenceValidation(unittest.TestCase):
+    """Tests for filtering out non-existent files from selection."""
+
+    def setUp(self):
+        """Create temporary directory with test images."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+        self.images_dir = os.path.join(self.temp_dir, 'images')
+        os.makedirs(self.images_dir)
+
+        # Create actual image files
+        self.real_images = []
+        for i in range(3):
+            img_path = os.path.join(self.images_dir, f'real_{i}.jpg')
+            img = Image.new('RGB', (100, 100), color=(i * 50, i * 50, i * 50))
+            img.save(img_path)
+            self.real_images.append(img_path)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_deleted_files_excluded_from_selection(self):
+        """Files deleted after indexing are excluded from selection.
+
+        This prevents the selector from returning paths to files that
+        no longer exist, which would cause errors in the wallpaper setter.
+        """
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Index all real images
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.images_dir)
+
+            # Verify all are indexed
+            count = selector.db.count_images()
+            self.assertEqual(count, 3)
+
+            # Delete one image file
+            deleted_path = self.real_images[1]
+            os.remove(deleted_path)
+
+            # Select images - should only return existing files
+            results = selector.select_images(count=10)
+
+            # Should have 2 results (not 3)
+            self.assertEqual(len(results), 2,
+                "Deleted files should be excluded from selection")
+
+            # Verify deleted file is not in results
+            self.assertNotIn(deleted_path, results,
+                "Deleted file path should not be returned")
+
+            # Verify all returned paths exist
+            for path in results:
+                self.assertTrue(os.path.exists(path),
+                    f"Returned path should exist: {path}")
+
+    def test_missing_files_removed_from_candidates(self):
+        """Files that don't exist are filtered during candidate gathering."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.models import ImageRecord
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Insert records for both existing and non-existing files
+            selector.db.insert_image(ImageRecord(
+                filepath=self.real_images[0],
+                filename='real_0.jpg',
+                times_shown=0,
+            ))
+            selector.db.insert_image(ImageRecord(
+                filepath='/nonexistent/fake_image.jpg',
+                filename='fake_image.jpg',
+                times_shown=0,
+            ))
+
+            # Select should only return the existing file
+            results = selector.select_images(count=10)
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0], self.real_images[0])
+
+
 if __name__ == '__main__':
     unittest.main()

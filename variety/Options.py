@@ -292,6 +292,68 @@ class Options:
             except Exception:
                 pass
 
+            # Smart Selection Engine settings
+            try:
+                self.smart_selection_enabled = (
+                    config["smart_selection_enabled"].lower() in TRUTH_VALUES
+                )
+            except Exception:
+                pass
+
+            try:
+                self.smart_image_cooldown_days = float(config["smart_image_cooldown_days"])
+                self.smart_image_cooldown_days = max(0, min(30, self.smart_image_cooldown_days))
+            except Exception:
+                pass
+
+            try:
+                self.smart_source_cooldown_days = float(config["smart_source_cooldown_days"])
+                self.smart_source_cooldown_days = max(0, min(7, self.smart_source_cooldown_days))
+            except Exception:
+                pass
+
+            try:
+                self.smart_favorite_boost = float(config["smart_favorite_boost"])
+                self.smart_favorite_boost = max(1.0, min(5.0, self.smart_favorite_boost))
+            except Exception:
+                pass
+
+            try:
+                self.smart_new_boost = float(config["smart_new_boost"])
+                self.smart_new_boost = max(1.0, min(3.0, self.smart_new_boost))
+            except Exception:
+                pass
+
+            try:
+                decay_type = config["smart_decay_type"].lower().strip()
+                if decay_type in ("exponential", "linear", "step"):
+                    self.smart_decay_type = decay_type
+            except Exception:
+                pass
+
+            try:
+                self.smart_color_enabled = config["smart_color_enabled"].lower() in TRUTH_VALUES
+            except Exception:
+                pass
+
+            try:
+                color_temp = config["smart_color_temperature"].lower().strip()
+                if color_temp in ("warm", "neutral", "cool", "adaptive"):
+                    self.smart_color_temperature = color_temp
+            except Exception:
+                pass
+
+            try:
+                self.smart_color_similarity = int(float(config["smart_color_similarity"]))
+                self.smart_color_similarity = max(0, min(100, self.smart_color_similarity))
+            except Exception:
+                pass
+
+            try:
+                self.smart_time_adaptation = config["smart_time_adaptation"].lower() in TRUTH_VALUES
+            except Exception:
+                pass
+
             try:
                 self.copyto_enabled = config["copyto_enabled"].lower() in TRUTH_VALUES
             except Exception:
@@ -685,6 +747,18 @@ class Options:
         self.sync_enabled = False
         self.stats_enabled = False
 
+        # Smart Selection Engine settings
+        self.smart_selection_enabled = True
+        self.smart_image_cooldown_days = 7.0
+        self.smart_source_cooldown_days = 1.0
+        self.smart_favorite_boost = 2.0
+        self.smart_new_boost = 1.5
+        self.smart_decay_type = "exponential"
+        self.smart_color_enabled = False
+        self.smart_color_temperature = "adaptive"
+        self.smart_color_similarity = 50
+        self.smart_time_adaptation = True
+
         self.copyto_enabled = False
         self.copyto_folder = "Default"
 
@@ -805,6 +879,18 @@ class Options:
             config["smart_enabled"] = str(self.smart_enabled)
             config["sync_enabled"] = str(self.sync_enabled)
             config["stats_enabled"] = str(self.stats_enabled)
+
+            # Smart Selection Engine settings
+            config["smart_selection_enabled"] = str(self.smart_selection_enabled)
+            config["smart_image_cooldown_days"] = str(self.smart_image_cooldown_days)
+            config["smart_source_cooldown_days"] = str(self.smart_source_cooldown_days)
+            config["smart_favorite_boost"] = str(self.smart_favorite_boost)
+            config["smart_new_boost"] = str(self.smart_new_boost)
+            config["smart_decay_type"] = self.smart_decay_type
+            config["smart_color_enabled"] = str(self.smart_color_enabled)
+            config["smart_color_temperature"] = self.smart_color_temperature
+            config["smart_color_similarity"] = str(self.smart_color_similarity)
+            config["smart_time_adaptation"] = str(self.smart_time_adaptation)
 
             config["copyto_enabled"] = str(self.copyto_enabled)
             config["copyto_folder"] = Util.collapseuser(self.copyto_folder)

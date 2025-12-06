@@ -18,6 +18,8 @@ class TestIndexingBenchmarks:
 
         def index_dir():
             with ImageDatabase(temp_bench_db) as db:
+                # Clear previous data to ensure fresh indexing each iteration
+                db.delete_all_images()
                 indexer = ImageIndexer(db, favorites_folder=fixtures_dir)
                 return indexer.index_directory(fixtures_dir)
 
@@ -58,6 +60,8 @@ class TestIndexingBenchmarks:
         try:
             def index_single():
                 with ImageDatabase(temp_bench_db) as db:
+                    # Clear previous data to ensure fresh indexing each iteration
+                    db.delete_all_images()
                     indexer = ImageIndexer(db)
                     return indexer.index_directory(single_dir)
 
