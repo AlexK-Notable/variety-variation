@@ -1494,12 +1494,20 @@ class PreferencesVarietyDialog(PreferencesDialog):
         try:
             if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
                 stats = self.parent.smart_selector.get_statistics()
-                self.ui.smart_stats_indexed.set_text(
-                    _("Images indexed: {}    Sources: {}").format(
-                        stats.get('images_indexed', 0),
-                        stats.get('sources_count', 0)
+                image_count = stats.get('images_indexed', 0)
+                source_count = stats.get('sources_count', 0)
+
+                # Show "Indexing..." when count is 0 (work in progress)
+                if image_count == 0:
+                    self.ui.smart_stats_indexed.set_text(_("Indexing..."))
+                else:
+                    self.ui.smart_stats_indexed.set_text(
+                        _("Images indexed: {}    Sources: {}").format(
+                            image_count,
+                            source_count
+                        )
                     )
-                )
+
                 images = stats.get('images_indexed', 0)
                 palettes = stats.get('images_with_palettes', 0)
                 pct = int(100 * palettes / images) if images > 0 else 0
@@ -1513,7 +1521,7 @@ class PreferencesVarietyDialog(PreferencesDialog):
                     )
                 )
             else:
-                self.ui.smart_stats_indexed.set_text(_("Images indexed: 0    Sources: 0"))
+                self.ui.smart_stats_indexed.set_text(_("Indexing..."))
                 self.ui.smart_stats_palettes.set_text(_("Images with palettes: 0 (0%)"))
                 self.ui.smart_stats_selections.set_text(_("Total selections: 0    Unique shown: 0"))
         except Exception:

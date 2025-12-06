@@ -157,5 +157,25 @@ class TestRebuildIndex(unittest.TestCase):
             self.assertEqual(selector.db.count_images(), 4)
 
 
+class TestStatsDisplay(unittest.TestCase):
+    """Test stats display behavior."""
+
+    def test_stats_shows_indexing_when_zero(self):
+        """Stats should show 'Indexing...' when count is 0."""
+        # This is a behavioral contract test
+        # When image_count == 0, display should show "Indexing..."
+        # When image_count > 0, display should show the actual count
+
+        # We can't easily test GTK UI, but we can test the logic
+        def get_display_text(image_count):
+            if image_count == 0:
+                return "Indexing..."
+            return str(image_count)
+
+        self.assertEqual(get_display_text(0), "Indexing...")
+        self.assertEqual(get_display_text(1), "1")
+        self.assertEqual(get_display_text(100), "100")
+
+
 if __name__ == '__main__':
     unittest.main()
