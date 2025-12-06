@@ -1550,13 +1550,41 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
             def rebuild():
                 try:
-                    self.parent.smart_selector.rebuild_index()
+                    # Collect all source folders
+                    folders = self._get_all_source_folders()
+                    self.parent.smart_selector.rebuild_index(source_folders=folders)
                     Util.add_mainloop_task(self.update_smart_selection_stats)
                 except Exception:
                     logger.exception(lambda: "Error rebuilding smart selection index")
 
             threading.Thread(target=rebuild, daemon=True).start()
             self.parent.show_notification(_("Rebuilding index..."))
+
+    def _get_all_source_folders(self):
+        """Get all enabled source folders for indexing."""
+        folders = []
+
+        # Favorites
+        if self.parent.options.favorites_folder:
+            folders.append(self.parent.options.favorites_folder)
+
+        # Downloaded
+        if hasattr(self.parent, 'real_download_folder') and self.parent.real_download_folder:
+            folders.append(self.parent.real_download_folder)
+        elif self.parent.options.download_folder:
+            folders.append(self.parent.options.download_folder)
+
+        # Fetched
+        if self.parent.options.fetched_folder:
+            folders.append(self.parent.options.fetched_folder)
+
+        # User folders
+        for source in self.parent.options.sources:
+            enabled, source_type, location = source
+            if enabled and source_type == Options.SourceType.FOLDER:
+                folders.append(os.path.expanduser(location))
+
+        return [f for f in folders if f and os.path.exists(f)]
 
     def on_smart_extract_palettes_clicked(self, widget=None):
         """Extract color palettes for all indexed images."""

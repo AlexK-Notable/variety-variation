@@ -118,5 +118,44 @@ class TestOnTheFlyIndexing(unittest.TestCase):
             self.assertEqual(img.times_shown, 1)
 
 
+class TestRebuildIndex(unittest.TestCase):
+    """Tests for rebuild index functionality."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+        # Create multiple source folders
+        self.folder1 = os.path.join(self.temp_dir, 'folder1')
+        self.folder2 = os.path.join(self.temp_dir, 'folder2')
+        os.makedirs(self.folder1)
+        os.makedirs(self.folder2)
+
+        # Create images
+        for folder in [self.folder1, self.folder2]:
+            for i in range(2):
+                img_path = os.path.join(folder, f'img_{i}.jpg')
+                img = Image.new('RGB', (100, 100))
+                img.save(img_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_rebuild_index_with_multiple_folders(self):
+        """rebuild_index should scan all provided folders."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Initially empty
+            self.assertEqual(selector.db.count_images(), 0)
+
+            # Rebuild with multiple folders
+            selector.rebuild_index(source_folders=[self.folder1, self.folder2])
+
+            # Should have 4 images (2 per folder)
+            self.assertEqual(selector.db.count_images(), 4)
+
+
 if __name__ == '__main__':
     unittest.main()
