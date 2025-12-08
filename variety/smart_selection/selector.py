@@ -319,6 +319,10 @@ class SmartSelector:
         self.db.clear_history()
         logger.info("Cleared selection history")
 
+        # Invalidate statistics cache (freshness distribution changes)
+        if self._statistics:
+            self._statistics.invalidate()
+
     def rebuild_index(self, source_folders: List[str] = None,
                       favorites_folder: str = None,
                       progress_callback: Callable[[int, int], None] = None):
@@ -403,6 +407,11 @@ class SmartSelector:
             progress_callback(total, total)
 
         logger.info(f"Extracted {extracted} palettes out of {total} images")
+
+        # Invalidate statistics cache (color distributions change)
+        if extracted > 0 and self._statistics:
+            self._statistics.invalidate()
+
         return extracted
 
     # =========================================================================
