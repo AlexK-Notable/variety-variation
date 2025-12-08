@@ -504,6 +504,85 @@ class VarietyWindow(Gtk.Window):
             pass
         return 'Dark16'  # Default fallback
 
+    def _get_smart_color_constraints(self):
+        """Generate color constraints based on user settings and time of day.
+
+        Returns:
+            SelectionConstraints with color filtering, or None if color selection disabled.
+        """
+        from variety.smart_selection.models import SelectionConstraints
+        from datetime import datetime
+
+        # Check if color selection is enabled
+        if not getattr(self.options, 'smart_color_enabled', False):
+            return None
+
+        # Get similarity threshold (convert 0-100 to 0-1)
+        min_similarity = getattr(self.options, 'smart_color_similarity', 50) / 100.0
+
+        # Get temperature preference
+        temperature = getattr(self.options, 'smart_color_temperature', 'neutral')
+
+        # Define target palette based on preference
+        if temperature == 'adaptive':
+            # Time-based color selection
+            hour = datetime.now().hour
+
+            if 6 <= hour < 12:  # Morning (cool, bright)
+                target_palette = {
+                    'avg_hue': 200,  # Blue-cyan range
+                    'avg_saturation': 0.4,
+                    'avg_lightness': 0.55,
+                    'color_temperature': -0.3,  # Cool
+                }
+            elif 12 <= hour < 18:  # Afternoon (neutral)
+                target_palette = {
+                    'avg_hue': 120,  # Green range (neutral)
+                    'avg_saturation': 0.4,
+                    'avg_lightness': 0.45,
+                    'color_temperature': 0.0,  # Neutral
+                }
+            elif 18 <= hour < 22:  # Evening (warm, darker)
+                target_palette = {
+                    'avg_hue': 30,  # Orange-yellow range
+                    'avg_saturation': 0.5,
+                    'avg_lightness': 0.35,
+                    'color_temperature': 0.5,  # Warm
+                }
+            else:  # Night (neutral, dark)
+                target_palette = {
+                    'avg_hue': 240,  # Blue-purple range
+                    'avg_saturation': 0.3,
+                    'avg_lightness': 0.25,
+                    'color_temperature': 0.0,  # Neutral
+                }
+        elif temperature == 'warm':
+            target_palette = {
+                'avg_hue': 30,  # Orange-yellow range
+                'avg_saturation': 0.5,
+                'avg_lightness': 0.45,
+                'color_temperature': 0.5,
+            }
+        elif temperature == 'cool':
+            target_palette = {
+                'avg_hue': 200,  # Blue-cyan range
+                'avg_saturation': 0.4,
+                'avg_lightness': 0.5,
+                'color_temperature': -0.4,
+            }
+        else:  # neutral
+            target_palette = {
+                'avg_hue': 120,  # Green (neutral)
+                'avg_saturation': 0.35,
+                'avg_lightness': 0.45,
+                'color_temperature': 0.0,
+            }
+
+        return SelectionConstraints(
+            target_palette=target_palette,
+            min_color_similarity=min_similarity,
+        )
+
     def register_clipboard(self):
         def clipboard_changed(clipboard, event):
             try:
@@ -1818,10 +1897,16 @@ class VarietyWindow(Gtk.Window):
                 # Index any new images we haven't seen before
                 self._smart_index_images(all_images)
 
-                # Use weighted selection
-                selected = self.smart_selector.select_images(count)
+                # Get color constraints if color selection is enabled
+                constraints = self._get_smart_color_constraints()
+
+                # Use weighted selection with optional color filtering
+                selected = self.smart_selector.select_images(count, constraints=constraints)
                 if selected:
-                    logger.debug(lambda: f"Smart Selection: Selected {len(selected)} images")
+                    if constraints and constraints.target_palette:
+                        logger.debug(lambda: f"Smart Selection: Selected {len(selected)} images with color filtering")
+                    else:
+                        logger.debug(lambda: f"Smart Selection: Selected {len(selected)} images")
                     return selected
             except Exception as e:
                 logger.warning(lambda: f"Smart Selection failed, falling back to random: {e}")
