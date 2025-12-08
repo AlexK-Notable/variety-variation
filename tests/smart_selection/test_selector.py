@@ -947,5 +947,99 @@ class TestFileExistenceValidation(unittest.TestCase):
             self.assertEqual(results[0], self.real_images[0])
 
 
+class TestStatisticsIntegration(unittest.TestCase):
+    """Tests for statistics module integration with SmartSelector."""
+
+    def setUp(self):
+        """Create temporary directory with test images."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+        self.images_dir = os.path.join(self.temp_dir, 'images')
+        os.makedirs(self.images_dir)
+
+        # Create test images
+        self.image_paths = []
+        for i in range(5):
+            path = os.path.join(self.images_dir, f'img{i}.jpg')
+            img = Image.new('RGB', (100, 100), color=(i * 50, i * 50, i * 50))
+            img.save(path)
+            self.image_paths.append(path)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_get_statistics_analyzer_returns_collection_statistics(self):
+        """get_statistics_analyzer returns a CollectionStatistics instance."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.statistics import CollectionStatistics
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            stats_analyzer = selector.get_statistics_analyzer()
+            self.assertIsInstance(stats_analyzer, CollectionStatistics)
+
+    def test_get_statistics_analyzer_lazy_initialization(self):
+        """get_statistics_analyzer lazy-initializes and returns same instance."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # First call should create instance
+            stats1 = selector.get_statistics_analyzer()
+            self.assertIsNotNone(stats1)
+            self.assertIsNotNone(selector._statistics)
+
+            # Second call should return same instance
+            stats2 = selector.get_statistics_analyzer()
+            self.assertIs(stats1, stats2, "Should return the same instance")
+
+    def test_record_shown_invalidates_statistics_cache(self):
+        """record_shown invalidates statistics cache if it exists."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Index images
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.images_dir)
+
+            # Initialize statistics analyzer
+            stats = selector.get_statistics_analyzer()
+
+            # Populate cache by calling a statistics method
+            freshness_dist = stats.get_freshness_distribution()
+            self.assertTrue(stats._cache_valid, "Cache should be valid after first call")
+
+            # Record shown should invalidate cache
+            selector.record_shown(self.image_paths[0])
+
+            self.assertFalse(stats._cache_valid,
+                "Cache should be invalidated after record_shown")
+
+    def test_rebuild_index_invalidates_statistics_cache(self):
+        """rebuild_index invalidates statistics cache if it exists."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.indexer import ImageIndexer
+
+        with SmartSelector(self.db_path, SelectionConfig()) as selector:
+            # Index images first time
+            indexer = ImageIndexer(selector.db)
+            indexer.index_directory(self.images_dir)
+
+            # Initialize statistics analyzer and populate cache
+            stats = selector.get_statistics_analyzer()
+            freshness_dist = stats.get_freshness_distribution()
+            self.assertTrue(stats._cache_valid, "Cache should be valid after first call")
+
+            # Rebuild index should invalidate cache
+            selector.rebuild_index(source_folders=[self.images_dir])
+
+            self.assertFalse(stats._cache_valid,
+                "Cache should be invalidated after rebuild_index")
+
+
 if __name__ == '__main__':
     unittest.main()

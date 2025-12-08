@@ -19,6 +19,7 @@
 import logging
 import os
 import random
+import shutil
 import stat
 import subprocess
 import threading
@@ -365,8 +366,8 @@ class PreferencesVarietyDialog(PreferencesDialog):
             # Update Smart Selection statistics
             self.update_smart_selection_stats()
 
-            # Disable Phase 3 color controls (not yet implemented)
-            self._disable_phase3_color_controls()
+            # Build Collection Insights section
+            self._build_insights_section()
 
             self.ui.tips_buffer.set_text(
                 "\n\n".join(
@@ -398,12 +399,9 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.update_clipboard_state()
             self.update_status_message()
             self.on_smart_selection_enabled_toggled()
-            # Disabled until Phase 3 color controls are implemented
-            # self.on_smart_color_enabled_toggled()
-            # self.on_smart_color_temperature_changed()
-
-            # Connect Smart Selection widgets to auto-update preview
-            self._connect_smart_selection_preview_signals()
+            self.on_smart_color_enabled_toggled()
+            self.on_smart_color_temperature_changed()
+            self._hide_unimplemented_controls()
         finally:
             # To be sure we are completely loaded, pass via two hops: first delay, then idle_add:
             def _finish_loading():
@@ -1417,6 +1415,18 @@ class PreferencesVarietyDialog(PreferencesDialog):
         """Toggle sensitivity of color-aware selection controls."""
         main_enabled = self.ui.smart_selection_enabled.get_active()
         color_enabled = self.ui.smart_color_enabled.get_active()
+
+        # Check wallust availability when user tries to enable color features
+        if widget and color_enabled and not self.loading:
+            if not shutil.which('wallust'):
+                # Wallust not available - show warning and disable
+                self.ui.smart_color_enabled.set_active(False)
+                self.parent.show_notification(
+                    _("Color-aware selection requires wallust. "
+                      "Install wallust to enable this feature.")
+                )
+                color_enabled = False
+
         enabled = main_enabled and color_enabled
         self.ui.smart_color_temperature.set_sensitive(enabled)
         self.ui.smart_color_similarity.set_sensitive(enabled)
@@ -1524,34 +1534,278 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 self.ui.smart_stats_indexed.set_text(_("Indexing..."))
                 self.ui.smart_stats_palettes.set_text(_("Images with palettes: 0 (0%)"))
                 self.ui.smart_stats_selections.set_text(_("Total selections: 0    Unique shown: 0"))
+
+            # Update insights section
+            self._update_insights_async()
         except Exception:
             logger.exception(lambda: "Error updating smart selection stats")
 
-    def _disable_phase3_color_controls(self):
-        """Disable color-related controls until Phase 3 is implemented."""
-        # Disable controls
-        self.ui.smart_color_enabled.set_sensitive(False)
-        self.ui.smart_color_temperature.set_sensitive(False)
-        self.ui.smart_color_similarity.set_sensitive(False)
-
-        # Set tooltips explaining why
-        coming_soon_tooltip = _("Color-aware selection coming in a future update")
-        self.ui.smart_color_enabled.set_tooltip_text(coming_soon_tooltip)
-        self.ui.smart_color_temperature.set_tooltip_text(coming_soon_tooltip)
-        self.ui.smart_color_similarity.set_tooltip_text(coming_soon_tooltip)
-
-        # Also disable the extract palettes button
-        if hasattr(self.ui, 'smart_extract_palettes'):
-            self.ui.smart_extract_palettes.set_sensitive(False)
-            self.ui.smart_extract_palettes.set_tooltip_text(coming_soon_tooltip)
-
-        # Hide time adaptation (not implemented)
+    def _hide_unimplemented_controls(self):
+        """Hide controls for features not yet implemented."""
+        # Hide time adaptation (not implemented yet)
         if hasattr(self.ui, 'smart_time_adaptation'):
             self.ui.smart_time_adaptation.set_visible(False)
         if hasattr(self.ui, 'smart_time_description'):
             self.ui.smart_time_description.set_visible(False)
         if hasattr(self.ui, 'smart_time_label'):
             self.ui.smart_time_label.set_visible(False)
+
+    def _build_insights_section(self):
+        """Build the Collection Insights section with expandable cards."""
+        try:
+            container = self.ui.smart_insights_container
+
+            # Clear any existing content
+            for child in container.get_children():
+                container.remove(child)
+
+            # Header with title and refresh button
+            header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            header_box.set_margin_bottom(10)
+
+            title_label = Gtk.Label()
+            title_label.set_markup("<b>{}</b>".format(_("Collection Insights")))
+            title_label.set_halign(Gtk.Align.START)
+            header_box.pack_start(title_label, True, True, 0)
+
+            # Refresh button
+            refresh_button = Gtk.Button(label=_("Refresh"))
+            refresh_button.connect("clicked", self.on_smart_refresh_insights_clicked)
+            header_box.pack_start(refresh_button, False, False, 0)
+
+            # Spinner (hidden by default)
+            self.insights_spinner = Gtk.Spinner()
+            header_box.pack_start(self.insights_spinner, False, False, 0)
+
+            container.pack_start(header_box, False, False, 0)
+
+            # Store references to expanders for updating
+            self.insights_expanders = {}
+
+            # Create 4 expandable insight cards
+            categories = [
+                ('lightness', _("Lightness Balance"), "weather-clear-symbolic"),
+                ('hue', _("Color Palette"), "preferences-color-symbolic"),
+                ('saturation', _("Saturation Levels"), "view-continuous-symbolic"),
+                ('freshness', _("Collection Freshness"), "document-new-symbolic"),
+            ]
+
+            for category_id, category_name, icon_name in categories:
+                # Create expander
+                expander = Gtk.Expander()
+                expander.set_margin_top(5)
+                expander.set_margin_bottom(5)
+
+                # Create header box with icon and summary
+                header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+                icon = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+                header.pack_start(icon, False, False, 0)
+
+                summary_label = Gtk.Label()
+                summary_label.set_halign(Gtk.Align.START)
+                summary_label.set_text(_("Loading..."))
+                header.pack_start(summary_label, True, True, 0)
+
+                expander.set_label_widget(header)
+
+                # Create content label for expanded view
+                content_label = Gtk.Label()
+                content_label.set_halign(Gtk.Align.START)
+                content_label.set_margin_start(32)
+                content_label.set_margin_top(5)
+                content_label.set_margin_bottom(5)
+                content_label.set_line_wrap(True)
+                content_label.set_selectable(True)
+
+                expander.add(content_label)
+                container.pack_start(expander, False, False, 0)
+
+                # Store references
+                self.insights_expanders[category_id] = {
+                    'expander': expander,
+                    'summary': summary_label,
+                    'content': content_label,
+                    'icon': icon,
+                }
+
+            container.show_all()
+            self.insights_spinner.hide()
+
+        except Exception:
+            logger.exception(lambda: "Error building insights section")
+
+    def _update_insights(self):
+        """Update the insights section with current statistics."""
+        try:
+            if not hasattr(self, 'insights_expanders'):
+                return
+
+            # Check if smart_selector is available
+            if not hasattr(self.parent, 'smart_selector') or not self.parent.smart_selector:
+                for category_id, refs in self.insights_expanders.items():
+                    refs['summary'].set_text(_("Indexing..."))
+                    refs['content'].set_text(_("Please wait while collection is being indexed."))
+                return
+
+            # Get statistics
+            analyzer = self.parent.smart_selector.get_statistics_analyzer()
+            stats = analyzer.get_all_stats()
+
+            total_with_palettes = stats.get('total_with_palettes', 0)
+
+            # If no palettes, show empty state
+            if total_with_palettes == 0:
+                empty_msg = _("Run 'Extract Palettes' to enable color insights")
+                for category_id, refs in self.insights_expanders.items():
+                    refs['summary'].set_text(empty_msg)
+                    refs['content'].set_text(_("Color insights require palette data."))
+                return
+
+            # Update each category
+            categories = {
+                'lightness': {
+                    'summary_key': 'lightness_summary',
+                    'dist_key': 'lightness_distribution',
+                    'labels': {
+                        'dark': _("Dark"),
+                        'medium_dark': _("Medium-dark"),
+                        'medium_light': _("Medium-light"),
+                        'light': _("Light"),
+                    }
+                },
+                'hue': {
+                    'summary_key': 'hue_summary',
+                    'dist_key': 'hue_distribution',
+                    'labels': {
+                        'red': _("Red"),
+                        'orange': _("Orange"),
+                        'yellow': _("Yellow"),
+                        'green': _("Green"),
+                        'cyan': _("Cyan"),
+                        'blue': _("Blue"),
+                        'purple': _("Purple"),
+                        'pink': _("Pink"),
+                        'neutral': _("Neutral"),
+                    }
+                },
+                'saturation': {
+                    'summary_key': 'saturation_summary',
+                    'dist_key': 'saturation_distribution',
+                    'labels': {
+                        'muted': _("Muted"),
+                        'moderate': _("Moderate"),
+                        'saturated': _("Saturated"),
+                        'vibrant': _("Vibrant"),
+                    }
+                },
+                'freshness': {
+                    'summary_key': 'freshness_summary',
+                    'dist_key': 'freshness_distribution',
+                    'labels': {
+                        'never_shown': _("Never shown"),
+                        'rarely_shown': _("Rarely shown (1-4)"),
+                        'often_shown': _("Often shown (5-9)"),
+                        'frequently_shown': _("Frequently shown (10+)"),
+                    }
+                },
+            }
+
+            gaps = stats.get('gaps', [])
+
+            for category_id, category_info in categories.items():
+                if category_id not in self.insights_expanders:
+                    continue
+
+                refs = self.insights_expanders[category_id]
+
+                # Update summary
+                summary_text = stats.get(category_info['summary_key'], _("No data"))
+
+                # Check if this category has gaps
+                category_gaps = [g for g in gaps if any(
+                    label.lower() in g.lower()
+                    for label in category_info['labels'].values()
+                )]
+
+                if category_gaps:
+                    # Add warning icon
+                    refs['icon'].set_from_icon_name("dialog-warning-symbolic", Gtk.IconSize.MENU)
+                else:
+                    # Restore default icon
+                    icon_names = {
+                        'lightness': "weather-clear-symbolic",
+                        'hue': "preferences-color-symbolic",
+                        'saturation': "view-continuous-symbolic",
+                        'freshness': "document-new-symbolic",
+                    }
+                    refs['icon'].set_from_icon_name(icon_names[category_id], Gtk.IconSize.MENU)
+
+                refs['summary'].set_text(summary_text)
+
+                # Build detailed content
+                distribution = stats.get(category_info['dist_key'], {})
+                labels = category_info['labels']
+
+                content_lines = []
+                for key, count in distribution.items():
+                    label = labels.get(key, key.replace('_', '-').capitalize())
+                    # Use correct denominator: freshness uses total_images (from images table),
+                    # other categories use total_with_palettes (from palettes table)
+                    if category_id == 'freshness':
+                        denominator = stats.get('total_images', 1)
+                    else:
+                        denominator = total_with_palettes
+
+                    if denominator > 0:
+                        percentage = int(count / denominator * 100)
+                        content_lines.append("{}: {} ({}%)".format(label, count, percentage))
+                    else:
+                        content_lines.append("{}: {}".format(label, count))
+
+                # Add gaps for this category if any
+                if category_gaps:
+                    content_lines.append("")
+                    content_lines.append(_("Gaps detected:"))
+                    for gap in category_gaps:
+                        content_lines.append("  • {}".format(gap))
+
+                refs['content'].set_text("\n".join(content_lines))
+
+        except Exception:
+            logger.exception(lambda: "Error updating insights")
+
+    def _update_insights_async(self):
+        """Update insights asynchronously with spinner."""
+        if not hasattr(self, 'insights_expanders') or not hasattr(self, 'insights_spinner'):
+            # Insights section not built yet, skip
+            return
+
+        def show_spinner():
+            self.insights_spinner.start()
+            self.insights_spinner.show()
+
+        def hide_spinner():
+            self.insights_spinner.stop()
+            self.insights_spinner.hide()
+
+        def update():
+            try:
+                Util.add_mainloop_task(show_spinner)
+                self._update_insights()
+            finally:
+                Util.add_mainloop_task(hide_spinner)
+
+        threading.Thread(target=update, daemon=True).start()
+
+    def on_smart_refresh_insights_clicked(self, widget=None):
+        """Handle refresh insights button click."""
+        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+            # Invalidate cache
+            analyzer = self.parent.smart_selector.get_statistics_analyzer()
+            analyzer.invalidate()
+            # Update insights
+            self._update_insights_async()
 
     def on_smart_rebuild_index_clicked(self, widget=None):
         """Rebuild the Smart Selection image index."""
@@ -1560,7 +1814,11 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 try:
                     # Collect all source folders
                     folders = self._get_all_source_folders()
-                    self.parent.smart_selector.rebuild_index(source_folders=folders)
+                    favorites_folder = self.parent.options.favorites_folder
+                    self.parent.smart_selector.rebuild_index(
+                        source_folders=folders,
+                        favorites_folder=favorites_folder
+                    )
                     Util.add_mainloop_task(self.update_smart_selection_stats)
                 except Exception:
                     logger.exception(lambda: "Error rebuilding smart selection index")
@@ -1575,40 +1833,75 @@ class PreferencesVarietyDialog(PreferencesDialog):
         # Favorites
         if self.parent.options.favorites_folder:
             folders.append(self.parent.options.favorites_folder)
+            logger.info(f"Smart Selection: Added favorites folder: {self.parent.options.favorites_folder}")
 
         # Downloaded
         if hasattr(self.parent, 'real_download_folder') and self.parent.real_download_folder:
             folders.append(self.parent.real_download_folder)
+            logger.info(f"Smart Selection: Added real_download_folder: {self.parent.real_download_folder}")
         elif self.parent.options.download_folder:
             folders.append(self.parent.options.download_folder)
+            logger.info(f"Smart Selection: Added download_folder: {self.parent.options.download_folder}")
 
         # Fetched
         if self.parent.options.fetched_folder:
             folders.append(self.parent.options.fetched_folder)
+            logger.info(f"Smart Selection: Added fetched_folder: {self.parent.options.fetched_folder}")
 
         # User folders
         for source in self.parent.options.sources:
             enabled, source_type, location = source
             if enabled and source_type == Options.SourceType.FOLDER:
                 folders.append(os.path.expanduser(location))
+                logger.info(f"Smart Selection: Added user folder: {location}")
 
-        return [f for f in folders if f and os.path.exists(f)]
+        valid_folders = [f for f in folders if f and os.path.exists(f)]
+        logger.info(f"Smart Selection: Total folders to index: {len(valid_folders)} of {len(folders)}")
+        for f in folders:
+            if f and not os.path.exists(f):
+                logger.warning(f"Smart Selection: Folder does not exist: {f}")
+        return valid_folders
 
     def on_smart_extract_palettes_clicked(self, widget=None):
         """Extract color palettes for all indexed images."""
-        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
-            def extract():
-                try:
-                    count = self.parent.smart_selector.extract_all_palettes()
-                    Util.add_mainloop_task(self.update_smart_selection_stats)
-                    self.parent.show_notification(
-                        _("Extracted {} palettes").format(count)
-                    )
-                except Exception:
-                    logger.exception(lambda: "Error extracting palettes")
+        if not hasattr(self.parent, 'smart_selector') or not self.parent.smart_selector:
+            return
 
-            threading.Thread(target=extract, daemon=True).start()
-            self.parent.show_notification(_("Extracting palettes..."))
+        # Prevent multiple clicks - disable button during extraction
+        if widget:
+            widget.set_sensitive(False)
+            original_label = widget.get_label()
+            widget.set_label(_("Extracting..."))
+
+        def progress_callback(current, total):
+            """Update button label with progress."""
+            def _update():
+                if widget and total > 0:
+                    pct = int((current / total) * 100)
+                    widget.set_label(_("Extracting... {}%").format(pct))
+            Util.add_mainloop_task(_update)
+
+        def extract():
+            try:
+                count = self.parent.smart_selector.extract_all_palettes(
+                    progress_callback=progress_callback
+                )
+                Util.add_mainloop_task(self.update_smart_selection_stats)
+                self.parent.show_notification(
+                    _("Extracted {} palettes").format(count)
+                )
+            except Exception:
+                logger.exception(lambda: "Error extracting palettes")
+                self.parent.show_notification(_("Palette extraction failed"))
+            finally:
+                # Re-enable button
+                def _restore():
+                    if widget:
+                        widget.set_sensitive(True)
+                        widget.set_label(original_label)
+                Util.add_mainloop_task(_restore)
+
+        threading.Thread(target=extract, daemon=True).start()
 
     def on_smart_clear_history_clicked(self, widget=None):
         """Clear the Smart Selection history."""
@@ -1635,39 +1928,124 @@ class PreferencesVarietyDialog(PreferencesDialog):
                     logger.exception(lambda: "Error clearing selection history")
 
     def on_smart_preview_clicked(self, widget=None):
-        """Generate and display preview of wallpaper candidates."""
+        """Generate and display preview of wallpaper candidates in a popout window."""
         if not hasattr(self.parent, 'smart_selector') or not self.parent.smart_selector:
             self.ui.smart_preview_status.set_text(_("Smart Selection not available"))
             return
 
-        # Show loading state
-        self.ui.smart_preview_button.set_sensitive(False)
-        self.ui.smart_preview_spinner.set_visible(True)
-        self.ui.smart_preview_spinner.start()
-        self.ui.smart_preview_status.set_text(_("Loading preview..."))
+        # Reuse existing dialog if present and visible
+        if hasattr(self, '_smart_preview_dialog') and self._smart_preview_dialog:
+            try:
+                if self._smart_preview_dialog.get_visible():
+                    # Just refresh the existing dialog's contents
+                    self._refresh_preview_dialog(self._smart_preview_dialog)
+                    self._smart_preview_dialog.present()
+                    return
+            except Exception:
+                # Dialog was destroyed, create new one
+                self._smart_preview_dialog = None
 
-        # Clear existing thumbnails
-        flowbox = self.ui.smart_preview_flowbox
-        for child in flowbox.get_children():
-            flowbox.remove(child)
+        # Create popout dialog
+        dialog = Gtk.Dialog(
+            title=_("Smart Selection Preview"),
+            transient_for=self,
+            modal=False,
+            destroy_with_parent=True
+        )
+        dialog.set_default_size(800, 600)
+        dialog.add_button(_("Close"), Gtk.ResponseType.CLOSE)
+
+        # Store reference for reuse
+        self._smart_preview_dialog = dialog
+
+        content_area = dialog.get_content_area()
+        content_area.set_spacing(6)
+        content_area.set_margin_start(10)
+        content_area.set_margin_end(10)
+        content_area.set_margin_top(10)
+        content_area.set_margin_bottom(10)
+
+        # Header bar with controls
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+        # Zoom control
+        zoom_label = Gtk.Label(label=_("Thumbnail size:"))
+        header_box.pack_start(zoom_label, False, False, 0)
+
+        zoom_adj = Gtk.Adjustment(value=120, lower=80, upper=300, step_increment=20)
+        zoom_scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=zoom_adj)
+        zoom_scale.set_size_request(150, -1)
+        zoom_scale.set_draw_value(False)
+        header_box.pack_start(zoom_scale, False, False, 0)
+
+        zoom_value_label = Gtk.Label(label="120px")
+        zoom_value_label.set_width_chars(6)
+        header_box.pack_start(zoom_value_label, False, False, 0)
+
+        # Refresh button
+        refresh_button = Gtk.Button(label=_("Refresh"))
+        header_box.pack_end(refresh_button, False, False, 0)
+
+        # Spinner
+        spinner = Gtk.Spinner()
+        header_box.pack_end(spinner, False, False, 0)
+
+        # Status label
+        status_label = Gtk.Label(label=_("Loading preview..."))
+        status_label.set_xalign(0)
+        header_box.pack_start(status_label, True, True, 0)
+
+        content_area.pack_start(header_box, False, False, 0)
+
+        # Scrolled window with FlowBox
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+
+        flowbox = Gtk.FlowBox()
+        flowbox.set_valign(Gtk.Align.START)
+        flowbox.set_min_children_per_line(2)
+        flowbox.set_max_children_per_line(12)
+        flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        flowbox.set_homogeneous(False)
+        scrolled.add(flowbox)
+
+        content_area.pack_start(scrolled, True, True, 0)
+
+        # Store references for callbacks
+        dialog._preview_data = {
+            'flowbox': flowbox,
+            'spinner': spinner,
+            'status_label': status_label,
+            'zoom_adj': zoom_adj,
+            'zoom_value_label': zoom_value_label,
+            'refresh_button': refresh_button,
+            'candidates': []
+        }
 
         def _load_preview():
+            data = dialog._preview_data
+            spinner.start()
+            spinner.set_visible(True)
+            refresh_button.set_sensitive(False)
+
             try:
-                candidates = self.parent.smart_selector.get_preview_candidates(count=40)
+                candidates = self.parent.smart_selector.get_preview_candidates(count=60)
+                data['candidates'] = candidates
 
                 def _update_ui():
-                    self._populate_preview_flowbox(candidates)
-                    self.ui.smart_preview_spinner.stop()
-                    self.ui.smart_preview_spinner.set_visible(False)
-                    self.ui.smart_preview_button.set_sensitive(True)
+                    self._populate_dialog_flowbox(dialog, candidates)
+                    spinner.stop()
+                    spinner.set_visible(False)
+                    refresh_button.set_sensitive(True)
                     if candidates:
-                        self.ui.smart_preview_status.set_text(
+                        status_label.set_text(
                             _("Showing top {} candidates (sorted by selection weight)").format(
                                 len(candidates)
                             )
                         )
                     else:
-                        self.ui.smart_preview_status.set_text(
+                        status_label.set_text(
                             _("No candidates found. Try rebuilding the index.")
                         )
 
@@ -1677,21 +2055,47 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 logger.exception(lambda: "Error loading preview")
 
                 def _show_error():
-                    self.ui.smart_preview_spinner.stop()
-                    self.ui.smart_preview_spinner.set_visible(False)
-                    self.ui.smart_preview_button.set_sensitive(True)
-                    self.ui.smart_preview_status.set_text(_("Error loading preview"))
+                    spinner.stop()
+                    spinner.set_visible(False)
+                    refresh_button.set_sensitive(True)
+                    status_label.set_text(_("Error loading preview"))
 
                 GObject.idle_add(_show_error)
 
-        thread = threading.Thread(target=_load_preview, daemon=True)
-        thread.start()
+        def on_zoom_changed(adj):
+            value = int(adj.get_value())
+            zoom_value_label.set_text("{}px".format(value))
+            self._resize_dialog_thumbnails(dialog, value)
 
-    def _populate_preview_flowbox(self, candidates):
-        """Populate the preview FlowBox with thumbnail images."""
-        flowbox = self.ui.smart_preview_flowbox
-        # Get thumbnail size from zoom slider (default 120)
-        thumb_size = int(self.ui.smart_preview_zoom_adj.get_value())
+        def on_refresh_clicked(btn):
+            # Clear existing
+            for child in flowbox.get_children():
+                flowbox.remove(child)
+            threading.Thread(target=_load_preview, daemon=True).start()
+
+        zoom_adj.connect('value-changed', on_zoom_changed)
+        refresh_button.connect('clicked', on_refresh_clicked)
+
+        def on_dialog_response(d, r):
+            self._smart_preview_dialog = None
+            d.destroy()
+
+        dialog.connect('response', on_dialog_response)
+
+        dialog.show_all()
+        spinner.set_visible(False)  # Hide until loading starts
+
+        # Start loading
+        threading.Thread(target=_load_preview, daemon=True).start()
+
+    def _populate_dialog_flowbox(self, dialog, candidates):
+        """Populate a dialog's FlowBox with thumbnail images (async loading)."""
+        data = dialog._preview_data
+        flowbox = data['flowbox']
+        thumb_size = int(data['zoom_adj'].get_value())
+
+        # Store image widgets for async updating
+        image_widgets = []
 
         for candidate in candidates:
             filepath = candidate['filepath']
@@ -1706,21 +2110,11 @@ class PreferencesVarietyDialog(PreferencesDialog):
             vbox.set_margin_top(3)
             vbox.set_margin_bottom(3)
 
-            # Create thumbnail image
-            try:
-                if os.path.exists(filepath):
-                    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                        filepath, thumb_size, thumb_size, True
-                    )
-                    image = Gtk.Image.new_from_pixbuf(pixbuf)
-                else:
-                    image = Gtk.Image.new_from_icon_name(
-                        "image-missing", Gtk.IconSize.DIALOG
-                    )
-            except Exception:
-                image = Gtk.Image.new_from_icon_name(
-                    "image-missing", Gtk.IconSize.DIALOG
-                )
+            # Create placeholder image (will be replaced async)
+            image = Gtk.Image.new_from_icon_name(
+                "image-loading", Gtk.IconSize.DIALOG
+            )
+            image.set_size_request(thumb_size, thumb_size)
 
             # Add frame around image
             frame = Gtk.Frame()
@@ -1758,19 +2152,172 @@ class PreferencesVarietyDialog(PreferencesDialog):
             vbox.show_all()
             flowbox.add(vbox)
 
-    def on_smart_preview_zoom_changed(self, widget=None):
-        """Handle zoom slider change - update label and refresh thumbnails."""
-        zoom_value = int(self.ui.smart_preview_zoom_adj.get_value())
-        self.ui.smart_preview_zoom_label.set_text("{}px".format(zoom_value))
-        # Refresh preview with new thumbnail size
-        self._schedule_preview_refresh()
+            # Track for async loading
+            image_widgets.append((image, filepath, thumb_size))
+
+        # Load thumbnails asynchronously
+        self._load_thumbnails_async(image_widgets)
+
+    def _load_thumbnails_async(self, image_widgets):
+        """Load thumbnails in background threads to avoid UI blocking."""
+        def load_single_thumbnail(image, filepath, thumb_size):
+            """Load a single thumbnail and update the image widget."""
+            try:
+                if os.path.exists(filepath):
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                        filepath, thumb_size, thumb_size, True
+                    )
+
+                    def _update():
+                        try:
+                            image.set_from_pixbuf(pixbuf)
+                        except Exception:
+                            pass  # Widget may have been destroyed
+                    GObject.idle_add(_update)
+                else:
+                    def _show_missing():
+                        try:
+                            image.set_from_icon_name(
+                                "image-missing", Gtk.IconSize.DIALOG
+                            )
+                        except Exception:
+                            pass
+                    GObject.idle_add(_show_missing)
+            except Exception:
+                def _show_error():
+                    try:
+                        image.set_from_icon_name(
+                            "image-missing", Gtk.IconSize.DIALOG
+                        )
+                    except Exception:
+                        pass
+                GObject.idle_add(_show_error)
+
+        def _load_all():
+            """Load all thumbnails in a thread pool (fire and forget)."""
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                for image, filepath, thumb_size in image_widgets:
+                    executor.submit(load_single_thumbnail, image, filepath, thumb_size)
+
+        # Start loading in background thread so we don't block
+        threading.Thread(target=_load_all, daemon=True).start()
+
+    def _resize_dialog_thumbnails(self, dialog, thumb_size):
+        """Resize thumbnails in a dialog without refetching candidates (async)."""
+        data = dialog._preview_data
+        candidates = data.get('candidates', [])
+        if not candidates:
+            return
+
+        flowbox = data['flowbox']
+        children = flowbox.get_children()
+
+        # Collect image widgets for async resizing
+        image_widgets = []
+
+        for i, child in enumerate(children):
+            if i >= len(candidates):
+                break
+
+            candidate = candidates[i]
+            filepath = candidate['filepath']
+
+            # Find the image widget inside the child
+            # Structure: FlowBoxChild -> vbox -> frame -> image
+            vbox = child.get_child()
+            if not vbox:
+                continue
+
+            frame = None
+            for widget in vbox.get_children():
+                if isinstance(widget, Gtk.Frame):
+                    frame = widget
+                    break
+
+            if not frame:
+                continue
+
+            image = frame.get_child()
+            if not isinstance(image, Gtk.Image):
+                continue
+
+            image_widgets.append((image, filepath, thumb_size))
+
+        # Load resized thumbnails asynchronously
+        if image_widgets:
+            self._load_thumbnails_async(image_widgets)
+
+    def _refresh_preview_dialog(self, dialog):
+        """Refresh the contents of an existing preview dialog."""
+        if not dialog or not hasattr(dialog, '_preview_data'):
+            return
+
+        data = dialog._preview_data
+        flowbox = data.get('flowbox')
+        spinner = data.get('spinner')
+        status_label = data.get('status_label')
+        refresh_button = data.get('refresh_button')
+
+        if not all([flowbox, spinner, status_label, refresh_button]):
+            return
+
+        def _load_preview():
+            spinner.start()
+            spinner.set_visible(True)
+            refresh_button.set_sensitive(False)
+
+            try:
+                candidates = self.parent.smart_selector.get_preview_candidates(count=60)
+                data['candidates'] = candidates
+
+                def _update_ui():
+                    self._populate_dialog_flowbox(dialog, candidates)
+                    spinner.stop()
+                    spinner.set_visible(False)
+                    refresh_button.set_sensitive(True)
+                    if candidates:
+                        status_label.set_text(
+                            _("Showing top {} candidates (sorted by selection weight)").format(
+                                len(candidates)
+                            )
+                        )
+                    else:
+                        status_label.set_text(
+                            _("No candidates found. Try rebuilding the index.")
+                        )
+
+                GObject.idle_add(_update_ui)
+
+            except Exception as e:
+                logger.exception(lambda: "Error refreshing preview")
+
+                def _show_error():
+                    spinner.stop()
+                    spinner.set_visible(False)
+                    refresh_button.set_sensitive(True)
+                    status_label.set_text(_("Error refreshing preview"))
+
+                GObject.idle_add(_show_error)
+
+        threading.Thread(target=_load_preview, daemon=True).start()
 
     def _schedule_preview_refresh(self):
         """Schedule a preview refresh after settings change.
 
         Debounces rapid changes to avoid excessive refreshes.
+        Only refreshes if the preview dialog is currently open.
         """
         if self.loading:
+            return
+
+        # Only refresh if preview dialog is currently visible
+        if not hasattr(self, '_smart_preview_dialog') or not self._smart_preview_dialog:
+            return
+        try:
+            if not self._smart_preview_dialog.get_visible():
+                return
+        except Exception:
             return
 
         # Cancel any pending refresh
@@ -1779,43 +2326,14 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         # Schedule refresh after a short delay (debounce)
         def _do_refresh():
-            Util.add_mainloop_task(self.on_smart_preview_clicked)
+            if hasattr(self, '_smart_preview_dialog') and self._smart_preview_dialog:
+                try:
+                    if self._smart_preview_dialog.get_visible():
+                        Util.add_mainloop_task(
+                            lambda: self._refresh_preview_dialog(self._smart_preview_dialog)
+                        )
+                except Exception:
+                    pass
 
         self._preview_refresh_timer = threading.Timer(0.5, _do_refresh)
         self._preview_refresh_timer.start()
-
-    def _connect_smart_selection_preview_signals(self):
-        """Connect Smart Selection settings to auto-update the preview."""
-        # Connect value-changed signals for all Smart Selection controls
-        widgets_with_value_changed = [
-            'smart_image_cooldown',
-            'smart_source_cooldown',
-            'smart_favorite_boost',
-            'smart_new_boost',
-            'smart_color_similarity',
-        ]
-        for widget_name in widgets_with_value_changed:
-            widget = getattr(self.ui, widget_name, None)
-            if widget:
-                widget.connect('value-changed', lambda w: self._schedule_preview_refresh())
-
-        # Connect toggled signals for checkboxes
-        widgets_with_toggled = [
-            'smart_selection_enabled',
-            'smart_color_enabled',
-            'smart_time_adaptation',
-        ]
-        for widget_name in widgets_with_toggled:
-            widget = getattr(self.ui, widget_name, None)
-            if widget:
-                widget.connect('toggled', lambda w: self._schedule_preview_refresh())
-
-        # Connect changed signals for combo boxes
-        widgets_with_changed = [
-            'smart_decay_type',
-            'smart_color_temperature',
-        ]
-        for widget_name in widgets_with_changed:
-            widget = getattr(self.ui, widget_name, None)
-            if widget:
-                widget.connect('changed', lambda w: self._schedule_preview_refresh())

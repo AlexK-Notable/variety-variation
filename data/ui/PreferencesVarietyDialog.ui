@@ -133,13 +133,6 @@
     <property name="step_increment">5</property>
     <property name="page_increment">10</property>
   </object>
-  <object class="GtkAdjustment" id="smart_preview_zoom_adj">
-    <property name="lower">80</property>
-    <property name="upper">240</property>
-    <property name="value">120</property>
-    <property name="step_increment">20</property>
-    <property name="page_increment">40</property>
-  </object>
   <object class="GtkListStore" id="sources_model">
     <columns>
       <!-- column-name enabled -->
@@ -4032,6 +4025,24 @@ Night (22-6): Dark/muted</property>
                     <property name="position">15</property>
                   </packing>
                 </child>
+                <!-- Collection Insights Section -->
+                <child>
+                  <object class="GtkBox" id="smart_insights_container">
+                    <property name="visible">True</property>
+                    <property name="can_focus">False</property>
+                    <property name="margin_left">15</property>
+                    <property name="margin_right">15</property>
+                    <property name="margin_top">15</property>
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">5</property>
+                    <!-- Will be populated programmatically -->
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">16</property>
+                  </packing>
+                </child>
                 <!-- Action Buttons -->
                 <child>
                   <object class="GtkBox" id="smart_actions_box">
@@ -4087,10 +4098,10 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">16</property>
+                    <property name="position">17</property>
                   </packing>
                 </child>
-                <!-- Preview Section -->
+                <!-- Preview Section - Simple button to open popout window -->
                 <child>
                   <object class="GtkSeparator">
                     <property name="visible">True</property>
@@ -4100,22 +4111,53 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">17</property>
+                    <property name="position">18</property>
                   </packing>
                 </child>
                 <child>
-                  <object class="GtkBox" id="smart_preview_header">
+                  <object class="GtkBox" id="smart_preview_section">
                     <property name="visible">True</property>
                     <property name="can_focus">False</property>
                     <property name="margin_top">10</property>
                     <property name="spacing">15</property>
                     <child>
-                      <object class="GtkLabel" id="smart_preview_label">
+                      <object class="GtkButton" id="smart_preview_button">
                         <property name="visible">True</property>
-                        <property name="can_focus">False</property>
-                        <property name="halign">start</property>
-                        <property name="label" translatable="yes">&lt;b&gt;Selection Preview&lt;/b&gt;</property>
-                        <property name="use_markup">True</property>
+                        <property name="can_focus">True</property>
+                        <property name="receives_default">True</property>
+                        <property name="tooltip_text" translatable="yes">Open a window showing wallpaper candidates sorted by selection probability</property>
+                        <signal name="clicked" handler="on_smart_preview_clicked" swapped="no"/>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="visible">True</property>
+                            <property name="can_focus">False</property>
+                            <property name="spacing">8</property>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="visible">True</property>
+                                <property name="can_focus">False</property>
+                                <property name="icon_name">view-grid-symbolic</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">0</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="visible">True</property>
+                                <property name="can_focus">False</property>
+                                <property name="label" translatable="yes">Open Selection Preview...</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">1</property>
+                              </packing>
+                            </child>
+                          </object>
+                        </child>
                       </object>
                       <packing>
                         <property name="expand">False</property>
@@ -4124,22 +4166,11 @@ Night (22-6): Dark/muted</property>
                       </packing>
                     </child>
                     <child>
-                      <object class="GtkSpinner" id="smart_preview_spinner">
-                        <property name="visible">False</property>
-                        <property name="can_focus">False</property>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">1</property>
-                      </packing>
-                    </child>
-                    <child>
                       <object class="GtkLabel" id="smart_preview_status">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
                         <property name="halign">start</property>
-                        <property name="label" translatable="yes">Preview updates automatically when settings change</property>
+                        <property name="label" translatable="yes">See which wallpapers are most likely to be selected</property>
                         <style>
                           <class name="dim-label"/>
                         </style>
@@ -4147,108 +4178,12 @@ Night (22-6): Dark/muted</property>
                       <packing>
                         <property name="expand">True</property>
                         <property name="fill">True</property>
-                        <property name="position">2</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkSeparator">
-                        <property name="visible">True</property>
-                        <property name="can_focus">False</property>
-                        <property name="orientation">vertical</property>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">3</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkLabel">
-                        <property name="visible">True</property>
-                        <property name="can_focus">False</property>
-                        <property name="label" translatable="yes">Zoom:</property>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">4</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkScale" id="smart_preview_zoom">
-                        <property name="visible">True</property>
-                        <property name="can_focus">True</property>
-                        <property name="width_request">120</property>
-                        <property name="adjustment">smart_preview_zoom_adj</property>
-                        <property name="round_digits">0</property>
-                        <property name="digits">0</property>
-                        <property name="draw_value">False</property>
-                        <signal name="value-changed" handler="on_smart_preview_zoom_changed" swapped="no"/>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">5</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkLabel" id="smart_preview_zoom_label">
-                        <property name="visible">True</property>
-                        <property name="can_focus">False</property>
-                        <property name="label">120px</property>
-                        <property name="width_chars">6</property>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">6</property>
-                      </packing>
-                    </child>
-                    <child>
-                      <object class="GtkButton" id="smart_preview_button">
-                        <property name="label" translatable="yes">Refresh</property>
-                        <property name="visible">True</property>
-                        <property name="can_focus">True</property>
-                        <property name="receives_default">True</property>
-                        <signal name="clicked" handler="on_smart_preview_clicked" swapped="no"/>
-                      </object>
-                      <packing>
-                        <property name="expand">False</property>
-                        <property name="fill">True</property>
-                        <property name="position">7</property>
+                        <property name="position">1</property>
                       </packing>
                     </child>
                   </object>
                   <packing>
                     <property name="expand">False</property>
-                    <property name="fill">True</property>
-                    <property name="position">18</property>
-                  </packing>
-                </child>
-                <child>
-                  <object class="GtkScrolledWindow" id="smart_preview_scroll">
-                    <property name="visible">True</property>
-                    <property name="can_focus">True</property>
-                    <property name="margin_left">30</property>
-                    <property name="margin_top">5</property>
-                    <property name="hscrollbar_policy">never</property>
-                    <property name="vscrollbar_policy">automatic</property>
-                    <property name="min_content_height">200</property>
-                    <property name="max_content_height">300</property>
-                    <child>
-                      <object class="GtkFlowBox" id="smart_preview_flowbox">
-                        <property name="visible">True</property>
-                        <property name="can_focus">False</property>
-                        <property name="valign">start</property>
-                        <property name="min_children_per_line">2</property>
-                        <property name="max_children_per_line">8</property>
-                        <property name="selection_mode">none</property>
-                        <property name="homogeneous">True</property>
-                      </object>
-                    </child>
-                  </object>
-                  <packing>
-                    <property name="expand">True</property>
                     <property name="fill">True</property>
                     <property name="position">19</property>
                   </packing>

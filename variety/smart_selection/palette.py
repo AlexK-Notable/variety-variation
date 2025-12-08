@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -193,6 +194,30 @@ class PaletteExtractor:
         except Exception:
             return False
 
+    def _get_palette_type(self) -> str:
+        """Get the palette type from wallust configuration.
+
+        Reads ~/.config/wallust/wallust.toml to find the configured palette.
+
+        Returns:
+            Palette type string like 'Dark16', 'Light16', etc.
+        """
+        config_path = os.path.expanduser('~/.config/wallust/wallust.toml')
+        try:
+            with open(config_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('palette'):
+                        # palette = "dark16" → extract "dark16" → "Dark16"
+                        match = re.search(r'"(\w+)"', line)
+                        if match:
+                            # Convert to title case: dark16 → Dark16
+                            palette = match.group(1)
+                            return palette[0].upper() + palette[1:]
+        except Exception:
+            pass
+        return 'Dark16'  # Default fallback
+
     def extract_palette(self, image_path: str) -> Optional[Dict[str, Any]]:
         """Extract color palette from an image using wallust.
 
@@ -252,12 +277,15 @@ class PaletteExtractor:
             latest_time = 0
             latest_file = None
 
+            # Get configured palette type
+            palette_type = self._get_palette_type()
+
             for entry in os.listdir(cache_dir):
                 entry_path = os.path.join(cache_dir, entry)
                 if os.path.isdir(entry_path):
-                    # Look for Dark16 palette files (filename contains "Dark16")
+                    # Look for palette files matching configured type
                     for subfile in os.listdir(entry_path):
-                        if 'Dark16' in subfile:
+                        if palette_type in subfile:
                             filepath = os.path.join(entry_path, subfile)
                             mtime = os.path.getmtime(filepath)
                             # Only consider files modified after threshold

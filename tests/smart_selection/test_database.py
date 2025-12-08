@@ -641,5 +641,309 @@ class TestDatabaseResilience(unittest.TestCase):
                         f"Expected WAL mode, got {mode}")
 
 
+class TestStatisticsQueries(unittest.TestCase):
+    """Tests for collection statistics aggregate queries."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+        from variety.smart_selection.database import ImageDatabase
+        self.db = ImageDatabase(self.db_path)
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        self.db.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.temp_dir)
+
+    def test_get_lightness_counts_empty_database(self):
+        """get_lightness_counts returns zeros for empty database."""
+        counts = self.db.get_lightness_counts()
+
+        self.assertEqual(counts['dark'], 0)
+        self.assertEqual(counts['medium_dark'], 0)
+        self.assertEqual(counts['medium_light'], 0)
+        self.assertEqual(counts['light'], 0)
+
+    def test_get_lightness_counts_with_data(self):
+        """get_lightness_counts correctly buckets images by lightness."""
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        # Add images with palettes in different lightness ranges
+        images = [
+            ('/dark1.jpg', 0.10),      # dark
+            ('/dark2.jpg', 0.24),      # dark
+            ('/medium_dark.jpg', 0.30), # medium_dark
+            ('/medium_light.jpg', 0.60), # medium_light
+            ('/light1.jpg', 0.80),     # light
+            ('/light2.jpg', 0.95),     # light
+        ]
+
+        for filepath, lightness in images:
+            self.db.insert_image(ImageRecord(filepath=filepath, filename=filepath.split('/')[-1]))
+            self.db.upsert_palette(PaletteRecord(filepath=filepath, avg_lightness=lightness))
+
+        counts = self.db.get_lightness_counts()
+
+        self.assertEqual(counts['dark'], 2)
+        self.assertEqual(counts['medium_dark'], 1)
+        self.assertEqual(counts['medium_light'], 1)
+        self.assertEqual(counts['light'], 2)
+
+    def test_get_lightness_counts_boundary_values(self):
+        """get_lightness_counts handles boundary values correctly."""
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        # Test exact boundary values
+        images = [
+            ('/boundary_0.jpg', 0.0),    # dark
+            ('/boundary_25.jpg', 0.25),  # medium_dark
+            ('/boundary_50.jpg', 0.50),  # medium_light
+            ('/boundary_75.jpg', 0.75),  # light
+            ('/boundary_100.jpg', 1.0),  # light
+        ]
+
+        for filepath, lightness in images:
+            self.db.insert_image(ImageRecord(filepath=filepath, filename=filepath.split('/')[-1]))
+            self.db.upsert_palette(PaletteRecord(filepath=filepath, avg_lightness=lightness))
+
+        counts = self.db.get_lightness_counts()
+
+        self.assertEqual(counts['dark'], 1)
+        self.assertEqual(counts['medium_dark'], 1)
+        self.assertEqual(counts['medium_light'], 1)
+        self.assertEqual(counts['light'], 2)
+
+    def test_get_hue_counts_empty_database(self):
+        """get_hue_counts returns zeros for empty database."""
+        counts = self.db.get_hue_counts()
+
+        self.assertEqual(counts['neutral'], 0)
+        self.assertEqual(counts['red'], 0)
+        self.assertEqual(counts['orange'], 0)
+        self.assertEqual(counts['yellow'], 0)
+        self.assertEqual(counts['green'], 0)
+        self.assertEqual(counts['cyan'], 0)
+        self.assertEqual(counts['blue'], 0)
+        self.assertEqual(counts['purple'], 0)
+        self.assertEqual(counts['pink'], 0)
+
+    def test_get_hue_counts_with_data(self):
+        """get_hue_counts correctly categorizes images by hue family."""
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        # Add images with palettes in different hue families
+        images = [
+            ('/red1.jpg', 5.0, 0.8),      # red
+            ('/red2.jpg', 350.0, 0.7),    # red (wraps around)
+            ('/orange.jpg', 30.0, 0.6),   # orange
+            ('/yellow.jpg', 60.0, 0.7),   # yellow
+            ('/green1.jpg', 100.0, 0.8),  # green
+            ('/green2.jpg', 150.0, 0.6),  # green
+            ('/cyan.jpg', 180.0, 0.7),    # cyan
+            ('/blue1.jpg', 220.0, 0.9),   # blue
+            ('/blue2.jpg', 240.0, 0.8),   # blue
+            ('/purple.jpg', 270.0, 0.7),  # purple
+            ('/pink.jpg', 310.0, 0.8),    # pink
+        ]
+
+        for filepath, hue, saturation in images:
+            self.db.insert_image(ImageRecord(filepath=filepath, filename=filepath.split('/')[-1]))
+            self.db.upsert_palette(PaletteRecord(
+                filepath=filepath,
+                avg_hue=hue,
+                avg_saturation=saturation
+            ))
+
+        counts = self.db.get_hue_counts()
+
+        self.assertEqual(counts['neutral'], 0)
+        self.assertEqual(counts['red'], 2)
+        self.assertEqual(counts['orange'], 1)
+        self.assertEqual(counts['yellow'], 1)
+        self.assertEqual(counts['green'], 2)
+        self.assertEqual(counts['cyan'], 1)
+        self.assertEqual(counts['blue'], 2)
+        self.assertEqual(counts['purple'], 1)
+        self.assertEqual(counts['pink'], 1)
+
+    def test_get_hue_counts_neutral_grayscale(self):
+        """get_hue_counts categorizes low-saturation images as neutral."""
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        # Add grayscale/desaturated images with various hue values
+        images = [
+            ('/gray1.jpg', 0.0, 0.05),    # neutral (low saturation)
+            ('/gray2.jpg', 180.0, 0.08),  # neutral (low saturation)
+            ('/gray3.jpg', 270.0, 0.02),  # neutral (low saturation)
+            ('/color.jpg', 120.0, 0.8),   # green (high saturation)
+        ]
+
+        for filepath, hue, saturation in images:
+            self.db.insert_image(ImageRecord(filepath=filepath, filename=filepath.split('/')[-1]))
+            self.db.upsert_palette(PaletteRecord(
+                filepath=filepath,
+                avg_hue=hue,
+                avg_saturation=saturation
+            ))
+
+        counts = self.db.get_hue_counts()
+
+        self.assertEqual(counts['neutral'], 3)
+        self.assertEqual(counts['green'], 1)
+
+    def test_get_saturation_counts_empty_database(self):
+        """get_saturation_counts returns zeros for empty database."""
+        counts = self.db.get_saturation_counts()
+
+        self.assertEqual(counts['muted'], 0)
+        self.assertEqual(counts['moderate'], 0)
+        self.assertEqual(counts['saturated'], 0)
+        self.assertEqual(counts['vibrant'], 0)
+
+    def test_get_saturation_counts_with_data(self):
+        """get_saturation_counts correctly buckets images by saturation."""
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        # Add images with palettes in different saturation ranges
+        images = [
+            ('/muted1.jpg', 0.10),      # muted
+            ('/muted2.jpg', 0.20),      # muted
+            ('/moderate.jpg', 0.40),    # moderate
+            ('/saturated1.jpg', 0.60),  # saturated
+            ('/saturated2.jpg', 0.70),  # saturated
+            ('/vibrant1.jpg', 0.85),    # vibrant
+            ('/vibrant2.jpg', 0.95),    # vibrant
+        ]
+
+        for filepath, saturation in images:
+            self.db.insert_image(ImageRecord(filepath=filepath, filename=filepath.split('/')[-1]))
+            self.db.upsert_palette(PaletteRecord(filepath=filepath, avg_saturation=saturation))
+
+        counts = self.db.get_saturation_counts()
+
+        self.assertEqual(counts['muted'], 2)
+        self.assertEqual(counts['moderate'], 1)
+        self.assertEqual(counts['saturated'], 2)
+        self.assertEqual(counts['vibrant'], 2)
+
+    def test_get_freshness_counts_empty_database(self):
+        """get_freshness_counts returns zeros for empty database."""
+        counts = self.db.get_freshness_counts()
+
+        self.assertEqual(counts['never_shown'], 0)
+        self.assertEqual(counts['rarely_shown'], 0)
+        self.assertEqual(counts['often_shown'], 0)
+        self.assertEqual(counts['frequently_shown'], 0)
+
+    def test_get_freshness_counts_with_data(self):
+        """get_freshness_counts correctly categorizes images by times_shown."""
+        from variety.smart_selection.models import ImageRecord
+
+        # Add images with different times_shown values
+        images = [
+            ('/never1.jpg', 0),           # never_shown
+            ('/never2.jpg', 0),           # never_shown
+            ('/rarely1.jpg', 1),          # rarely_shown
+            ('/rarely2.jpg', 4),          # rarely_shown
+            ('/often1.jpg', 5),           # often_shown
+            ('/often2.jpg', 9),           # often_shown
+            ('/frequent1.jpg', 10),       # frequently_shown
+            ('/frequent2.jpg', 25),       # frequently_shown
+            ('/frequent3.jpg', 100),      # frequently_shown
+        ]
+
+        for filepath, times_shown in images:
+            self.db.insert_image(ImageRecord(
+                filepath=filepath,
+                filename=filepath.split('/')[-1],
+                times_shown=times_shown
+            ))
+
+        counts = self.db.get_freshness_counts()
+
+        self.assertEqual(counts['never_shown'], 2)
+        self.assertEqual(counts['rarely_shown'], 2)
+        self.assertEqual(counts['often_shown'], 2)
+        self.assertEqual(counts['frequently_shown'], 3)
+
+    def test_get_freshness_counts_boundary_values(self):
+        """get_freshness_counts handles boundary values correctly."""
+        from variety.smart_selection.models import ImageRecord
+
+        # Test exact boundary values
+        images = [
+            ('/boundary_0.jpg', 0),   # never_shown
+            ('/boundary_1.jpg', 1),   # rarely_shown
+            ('/boundary_4.jpg', 4),   # rarely_shown
+            ('/boundary_5.jpg', 5),   # often_shown
+            ('/boundary_9.jpg', 9),   # often_shown
+            ('/boundary_10.jpg', 10), # frequently_shown
+        ]
+
+        for filepath, times_shown in images:
+            self.db.insert_image(ImageRecord(
+                filepath=filepath,
+                filename=filepath.split('/')[-1],
+                times_shown=times_shown
+            ))
+
+        counts = self.db.get_freshness_counts()
+
+        self.assertEqual(counts['never_shown'], 1)
+        self.assertEqual(counts['rarely_shown'], 2)
+        self.assertEqual(counts['often_shown'], 2)
+        self.assertEqual(counts['frequently_shown'], 1)
+
+    def test_statistics_queries_are_thread_safe(self):
+        """Statistics queries work correctly with concurrent access."""
+        import threading
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        # Pre-populate database
+        for i in range(20):
+            self.db.insert_image(ImageRecord(
+                filepath=f'/img{i}.jpg',
+                filename=f'img{i}.jpg',
+                times_shown=i
+            ))
+            self.db.upsert_palette(PaletteRecord(
+                filepath=f'/img{i}.jpg',
+                avg_lightness=i / 20.0,
+                avg_saturation=i / 20.0,
+                avg_hue=i * 18.0  # 0-360 spread
+            ))
+
+        errors = []
+        results = []
+
+        def query_stats():
+            try:
+                lightness = self.db.get_lightness_counts()
+                hue = self.db.get_hue_counts()
+                saturation = self.db.get_saturation_counts()
+                freshness = self.db.get_freshness_counts()
+                results.append((lightness, hue, saturation, freshness))
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=query_stats) for _ in range(5)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Should have no errors
+        self.assertEqual(errors, [], f"Thread errors occurred: {errors}")
+
+        # All threads should get the same results
+        self.assertEqual(len(results), 5)
+        for result in results[1:]:
+            self.assertEqual(result, results[0])
+
+
 if __name__ == '__main__':
     unittest.main()

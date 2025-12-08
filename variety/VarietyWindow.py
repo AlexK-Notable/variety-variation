@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program.  If not, see <http://www.gnu.org/licenses/>.
 ### END LICENSE
+import json
 import logging
 import os
 import random
@@ -28,6 +29,8 @@ import time
 import urllib.parse
 import webbrowser
 from typing import List
+
+from requests.exceptions import HTTPError
 
 from PIL import Image as PILImage
 
@@ -162,6 +165,12 @@ class VarietyWindow(Gtk.Window):
 
         self.image_count = -1
         self.image_colors_cache = {}
+
+        # Track source lockouts due to HTTP 403/429 errors
+        # Key: normalized source location (URL), Value: lockout timestamp
+        self._source_lockouts = {}
+        # Lockout duration in seconds (24 hours)
+        self._source_lockout_duration = 24 * 60 * 60
 
         self.load_downloader_plugins()
         self.create_downloaders_cache()
@@ -312,8 +321,13 @@ class VarietyWindow(Gtk.Window):
 
         self.create_desktop_entry()
 
-    def _init_smart_selector(self):
-        """Initialize the Smart Selection Engine for weighted wallpaper selection."""
+    def _init_smart_selector(self, update_config_only=False):
+        """Initialize the Smart Selection Engine for weighted wallpaper selection.
+
+        Args:
+            update_config_only: If True, only update config of existing selector.
+                              If False (default), do full initialization with indexing.
+        """
         try:
             # Database stored in config folder
             db_path = os.path.join(self.config_folder, "smart_selection.db")
@@ -330,6 +344,12 @@ class VarietyWindow(Gtk.Window):
 
             # Enable palette extraction if color-aware selection is enabled
             enable_palette_extraction = getattr(self.options, 'smart_color_enabled', False)
+
+            # If just updating config and selector exists, update it in place
+            if update_config_only and hasattr(self, 'smart_selector') and self.smart_selector:
+                self.smart_selector.config = config
+                logger.debug(lambda: "Smart Selection: Updated config in place")
+                return
 
             # Close existing selector if reloading config
             if hasattr(self, 'smart_selector') and self.smart_selector:
@@ -410,6 +430,79 @@ class VarietyWindow(Gtk.Window):
         except Exception as e:
             logger.warning(lambda: f"Smart Selection Engine failed to initialize: {e}")
             self.smart_selector = None
+
+    def _read_wallust_cache_for_image(self, filepath: str):
+        """Read color palette from wallust's cache directory.
+
+        After set_wallpaper script runs wallust, the palette is stored in
+        ~/.cache/wallust/{hash}_version/{backend}_{colorspace}_{palette_type}
+
+        Args:
+            filepath: Path to the image (used for logging, not cache lookup).
+
+        Returns:
+            Dictionary with color palette data, or None if not found.
+        """
+        cache_dir = os.path.expanduser('~/.cache/wallust')
+        if not os.path.isdir(cache_dir):
+            return None
+
+        # Detect palette type from wallust config
+        palette_type = self._get_wallust_palette_type()
+
+        # Find the most recently modified palette file
+        # (wallust just ran, so it should be the freshest)
+        latest_file = None
+        latest_time = 0
+
+        try:
+            for entry in os.listdir(cache_dir):
+                entry_path = os.path.join(cache_dir, entry)
+                if os.path.isdir(entry_path):
+                    for subfile in os.listdir(entry_path):
+                        if palette_type in subfile:
+                            file_path = os.path.join(entry_path, subfile)
+                            mtime = os.path.getmtime(file_path)
+                            if mtime > latest_time:
+                                latest_time = mtime
+                                latest_file = file_path
+
+            if latest_file:
+                # Only use if modified in the last 5 seconds (recent wallust run)
+                if time.time() - latest_time < 5.0:
+                    with open(latest_file, 'r') as f:
+                        return json.load(f)
+                else:
+                    logger.debug(lambda: f"Wallust cache too old ({time.time() - latest_time:.1f}s)")
+
+        except Exception as e:
+            logger.debug(lambda: f"Failed to read wallust cache: {e}")
+
+        return None
+
+    def _get_wallust_palette_type(self) -> str:
+        """Get the palette type from wallust configuration.
+
+        Reads ~/.config/wallust/wallust.toml to find the configured palette.
+
+        Returns:
+            Palette type string like 'Dark16', 'Light16', etc.
+        """
+        config_path = os.path.expanduser('~/.config/wallust/wallust.toml')
+        try:
+            with open(config_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('palette'):
+                        # palette = "dark16" → extract "dark16" → "Dark16"
+                        match = re.search(r'"(\w+)"', line)
+                        if match:
+                            # Convert to title case: dark16 → Dark16
+                            palette = match.group(1)
+                            return palette[0].upper() + palette[1:]
+        except Exception:
+            pass
+        return 'Dark16'  # Default fallback
 
     def register_clipboard(self):
         def clipboard_changed(clipboard, event):
@@ -530,7 +623,9 @@ class VarietyWindow(Gtk.Window):
             self.folders.append(self.options.fetched_folder)
 
         # Initialize Smart Selection Engine
-        self._init_smart_selector()
+        # On startup: do full init with indexing
+        # On config reload: just update config, don't re-index
+        self._init_smart_selector(update_config_only=not is_on_start)
 
         self.downloaders = []
         self.download_folder_size = None
@@ -1265,15 +1360,26 @@ class VarietyWindow(Gtk.Window):
             self.purge_downloaded()
 
     def download_one_from(self, downloader):
+        # Check if source is locked out due to recent HTTP errors
+        source_location = downloader.get_source_location()
+        if source_location and self._is_source_locked_out(source_location):
+            return None
+
         try:
             file = downloader.download_one()
-        except:
+        except Exception as e:
             logger.exception(lambda: "Could not download wallpaper:")
+            # Track HTTP errors for lockout
+            self._handle_source_failure(downloader, e)
             file = None
 
         if file:
             self.register_downloaded_file(file)
             downloader.state["last_download_success"] = time.time()
+
+            # Clear lockout on successful download
+            if source_location:
+                self._clear_source_lockout(source_location)
 
             if downloader.is_refresher() or self.image_ok(file, 0):
                 # give priority to newly-downloaded images - unseen_downloads are later
@@ -1669,6 +1775,16 @@ class VarietyWindow(Gtk.Window):
                 self.set_desktop_wallpaper(to_set, filename, refresh_level, display_mode_param)
                 self.current = filename
 
+                # Record for Smart Selection AFTER set_desktop_wallpaper completes
+                # This ensures wallust has run and its cache is available
+                if refresh_level == VarietyWindow.RefreshLevel.ALL:
+                    if hasattr(self, 'smart_selector') and self.smart_selector:
+                        try:
+                            palette = self._read_wallust_cache_for_image(filename)
+                            self.smart_selector.record_shown(filename, wallust_palette=palette)
+                        except Exception as e:
+                            logger.debug(lambda: f"Smart Selection record_shown failed: {e}")
+
                 if self.options.icon == "Current" and self.current:
 
                     def _set_icon_to_current():
@@ -1826,6 +1942,135 @@ class VarietyWindow(Gtk.Window):
             > 0
         )
 
+    def _normalize_url(self, url):
+        """Normalize a URL for comparison purposes.
+
+        Strips trailing slashes, normalizes case, and treats http/https as equivalent.
+        """
+        if not url:
+            return url
+        # Strip trailing slashes
+        url = url.rstrip('/')
+        # Normalize to lowercase for comparison
+        url = url.lower()
+        # Treat http and https as equivalent
+        if url.startswith('https://'):
+            url = 'http://' + url[8:]
+        return url
+
+    def _disable_source_in_options(self, source_location, source_type=None, reason=""):
+        """Disable a source in options.sources by setting its enabled flag to False.
+
+        Args:
+            source_location: The location/URL of the source to disable.
+            source_type: Optional source type to match (for disambiguation).
+            reason: Optional reason for disabling (for logging/notification).
+
+        Returns:
+            True if source was found and disabled, False otherwise.
+        """
+        normalized_target = self._normalize_url(source_location)
+
+        for i, source in enumerate(self.options.sources):
+            enabled, s_type, location = source
+            normalized_location = self._normalize_url(location)
+
+            # Match by normalized URL (ignore trailing slashes, case)
+            if normalized_location == normalized_target and enabled:
+                # Match by source type if provided, otherwise match any
+                if source_type is None or s_type == source_type:
+                    # Disable this source
+                    self.options.sources[i] = [False, s_type, location]
+                    self.options.write()
+                    logger.warning(
+                        lambda: f"Auto-disabled source: {location} ({reason})"
+                    )
+                    return True
+
+        logger.debug(lambda: f"Source not found in options: {source_location}")
+        return False
+
+    def _handle_source_failure(self, downloader, error):
+        """Lock out source for 24 hours on HTTP 403/429 error.
+
+        Args:
+            downloader: The downloader that failed.
+            error: The exception that occurred.
+        """
+        # Only track HTTP 403 (Forbidden) and 429 (Rate Limited) errors
+        if not isinstance(error, HTTPError):
+            return
+
+        status_code = getattr(error.response, 'status_code', None)
+        if status_code not in (403, 429):
+            return
+
+        source_location = downloader.get_source_location()
+        if not source_location:
+            return
+
+        # Use normalized URL for tracking to avoid duplicates
+        normalized_location = self._normalize_url(source_location)
+
+        # Set lockout timestamp
+        lockout_until = time.time() + self._source_lockout_duration
+        self._source_lockouts[normalized_location] = lockout_until
+
+        hours = self._source_lockout_duration / 3600
+        status_name = 'Rate Limited' if status_code == 429 else 'Blocked/Forbidden'
+
+        logger.warning(
+            lambda: f"Source {source_location} returned HTTP {status_code} ({status_name}). "
+            f"Locked out for {hours:.0f} hours."
+        )
+
+        # Show notification to user
+        self.show_notification(
+            _("Source Locked Out"),
+            _("%(source)s returned HTTP %(status)s.\n"
+              "Skipping for %(hours)s hours.") % {
+                'source': source_location[:50] + ('...' if len(source_location) > 50 else ''),
+                'status': status_code,
+                'hours': f"{hours:.0f}"
+            }
+        )
+
+    def _is_source_locked_out(self, source_location):
+        """Check if a source is currently locked out.
+
+        Args:
+            source_location: The source URL to check.
+
+        Returns:
+            True if source is locked out, False otherwise.
+        """
+        normalized_location = self._normalize_url(source_location)
+        lockout_until = self._source_lockouts.get(normalized_location)
+
+        if lockout_until is None:
+            return False
+
+        if time.time() >= lockout_until:
+            # Lockout expired, clean up
+            del self._source_lockouts[normalized_location]
+            logger.info(lambda: f"Lockout expired for source: {source_location}")
+            return False
+
+        # Still locked out
+        remaining = lockout_until - time.time()
+        hours = remaining / 3600
+        logger.debug(
+            lambda: f"Source {source_location} is locked out for {hours:.1f} more hours"
+        )
+        return True
+
+    def _clear_source_lockout(self, source_location):
+        """Clear lockout for a source after successful download."""
+        normalized_location = self._normalize_url(source_location)
+        if normalized_location in self._source_lockouts:
+            del self._source_lockouts[normalized_location]
+            logger.info(lambda: f"Cleared lockout for source: {source_location}")
+
     def change_wallpaper(self, widget=None, keep_quote=False):
         try:
             img = None
@@ -1926,12 +2171,8 @@ class VarietyWindow(Gtk.Window):
             self.last_change_time = time.time()
             self.set_wp_throttled(img)
 
-            # Record for Smart Selection (recency tracking)
-            if hasattr(self, 'smart_selector') and self.smart_selector:
-                try:
-                    self.smart_selector.record_shown(img)
-                except Exception as e:
-                    logger.debug(lambda: f"Smart Selection record_shown failed: {e}")
+            # Note: Smart Selection record_shown is called in do_set_wp()
+            # AFTER set_desktop_wallpaper() completes, so wallust cache is available
 
             # Unsplash API requires that we call their download endpoint
             # when setting the wallpaper, not when queueing it:

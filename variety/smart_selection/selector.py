@@ -5,11 +5,12 @@ Provides weighted selection based on recency, source rotation,
 favorites boost, and optional constraints.
 """
 
+import bisect
 import os
 import random
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
 
 from variety.smart_selection.database import ImageDatabase
 from variety.smart_selection.config import SelectionConfig
@@ -20,6 +21,9 @@ from variety.smart_selection.palette import (
     create_palette_record,
     palette_similarity,
 )
+
+if TYPE_CHECKING:
+    from variety.smart_selection.statistics import CollectionStatistics
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,7 @@ class SmartSelector:
         self._owns_db = True
         self._enable_palette_extraction = enable_palette_extraction
         self._palette_extractor = None
+        self._statistics: Optional['CollectionStatistics'] = None
         if enable_palette_extraction:
             self._palette_extractor = PaletteExtractor()
 
@@ -105,6 +110,7 @@ class SmartSelector:
             weights.append(weight)
 
         # Weighted random selection without replacement
+        # Use cumulative weights with binary search for O(log n) lookups
         selected = []
         remaining_candidates = list(candidates)
         remaining_weights = list(weights)
@@ -113,24 +119,25 @@ class SmartSelector:
             if not remaining_candidates:
                 break
 
-            # Normalize weights
+            # Build cumulative weights for binary search
             total_weight = sum(remaining_weights)
             if total_weight <= 0:
                 # All weights are zero, fall back to uniform
                 idx = random.randrange(len(remaining_candidates))
             else:
-                # Weighted random choice
+                # Build cumulative sum for bisect
+                cumulative_weights = []
+                cumsum = 0.0
+                for w in remaining_weights:
+                    cumsum += w
+                    cumulative_weights.append(cumsum)
+
+                # Weighted random choice using binary search (O(log n))
                 r = random.uniform(0, total_weight)
-                cumulative = 0.0
-                idx = len(remaining_candidates) - 1  # Default to last item
-                for i, w in enumerate(remaining_weights):
-                    cumulative += w
-                    if r <= cumulative:
-                        idx = i
-                        break
-                # Note: If loop completes without break (due to float precision),
-                # idx defaults to last item, which is mathematically correct
-                # when r is at or near the upper bound
+                idx = bisect.bisect_left(cumulative_weights, r)
+
+                # Clamp to valid range (handles float precision edge cases)
+                idx = min(idx, len(remaining_candidates) - 1)
 
             selected.append(remaining_candidates[idx])
             remaining_candidates.pop(idx)
@@ -265,9 +272,24 @@ class SmartSelector:
             except Exception as e:
                 logger.warning(f"Failed to store palette for {filepath}: {e}")
 
+        # Invalidate statistics cache
+        if self._statistics:
+            self._statistics.invalidate()
+
     # =========================================================================
     # Statistics and Management Methods
     # =========================================================================
+
+    def get_statistics_analyzer(self) -> 'CollectionStatistics':
+        """Get the collection statistics analyzer (lazy initialization).
+
+        Returns:
+            CollectionStatistics instance for analyzing collection distributions.
+        """
+        if self._statistics is None:
+            from variety.smart_selection.statistics import CollectionStatistics
+            self._statistics = CollectionStatistics(self.db)
+        return self._statistics
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics for preferences display.
@@ -298,34 +320,48 @@ class SmartSelector:
         logger.info("Cleared selection history")
 
     def rebuild_index(self, source_folders: List[str] = None,
+                      favorites_folder: str = None,
                       progress_callback: Callable[[int, int], None] = None):
         """Rebuild the image index from scratch.
 
         Clears all existing index data and re-scans source folders.
+        Creates a backup of the database before clearing.
 
         Args:
             source_folders: List of folder paths to index.
                            If None, clears index without re-populating.
+            favorites_folder: Path to favorites folder for marking favorites.
             progress_callback: Optional callback(current, total) for progress updates.
         """
         from variety.smart_selection.indexer import ImageIndexer
+
+        # Backup before destructive operation
+        backup_path = self.db.db_path + '.backup'
+        if self.db.backup(backup_path):
+            logger.info(f"Created database backup at {backup_path}")
+        else:
+            logger.warning("Failed to create database backup before rebuild")
 
         self.db.delete_all_images()
         logger.info("Cleared image index")
 
         if source_folders:
-            indexer = ImageIndexer(self.db)
+            indexer = ImageIndexer(self.db, favorites_folder=favorites_folder)
             total = len(source_folders)
             for i, folder in enumerate(source_folders):
                 if progress_callback:
                     progress_callback(i, total)
                 try:
-                    indexer.index_directory(folder)
+                    indexer.index_directory(folder, recursive=True)
                 except Exception as e:
                     logger.warning(f"Failed to index folder {folder}: {e}")
             if progress_callback:
                 progress_callback(total, total)
             logger.info(f"Rebuilt index with {self.db.count_images()} images")
+
+        # Invalidate statistics cache
+        if self._statistics:
+            self._statistics.invalidate()
 
     def extract_all_palettes(self, progress_callback: Callable[[int, int], None] = None):
         """Extract color palettes for all indexed images without palettes.
@@ -479,3 +515,90 @@ class SmartSelector:
                     c['normalized_weight'] = 1.0
 
         return top_candidates
+
+    # =========================================================================
+    # Database Maintenance Methods
+    # =========================================================================
+
+    def vacuum_database(self) -> bool:
+        """Optimize and compact the database.
+
+        Reclaims space from deleted records and optimizes storage.
+        Should be called periodically for long-running installations.
+
+        Returns:
+            True if vacuum succeeded, False otherwise.
+        """
+        if self.db.vacuum():
+            logger.info("Database vacuum completed successfully")
+            return True
+        else:
+            logger.warning("Database vacuum failed")
+            return False
+
+    def verify_index(self) -> Dict[str, Any]:
+        """Verify database integrity and check for issues.
+
+        Checks for:
+        - SQLite integrity errors
+        - Orphaned palette records (no matching image)
+        - Missing files (indexed but no longer on disk)
+
+        Returns:
+            Dictionary with verification results:
+            - is_valid: Overall integrity status
+            - integrity_result: SQLite integrity check result
+            - orphaned_palettes: Number of orphaned palette records
+            - missing_files: Number of indexed files not on disk
+            - total_images: Total indexed images
+            - total_palettes: Total palette records
+        """
+        return self.db.verify_integrity()
+
+    def cleanup_index(self, remove_orphans: bool = True,
+                      remove_missing: bool = True) -> Dict[str, int]:
+        """Clean up the index by removing invalid entries.
+
+        Args:
+            remove_orphans: If True, remove orphaned palette records.
+            remove_missing: If True, remove entries for files that no longer exist.
+
+        Returns:
+            Dictionary with cleanup results:
+            - orphans_removed: Number of orphaned palettes removed
+            - missing_removed: Number of missing file entries removed
+        """
+        results = {'orphans_removed': 0, 'missing_removed': 0}
+
+        if remove_orphans:
+            count = self.db.cleanup_orphans()
+            results['orphans_removed'] = count
+            if count > 0:
+                logger.info(f"Removed {count} orphaned palette records")
+
+        if remove_missing:
+            count = self.db.remove_missing_files()
+            results['missing_removed'] = count
+            if count > 0:
+                logger.info(f"Removed {count} entries for missing files")
+
+        return results
+
+    def backup_database(self, backup_path: str = None) -> bool:
+        """Create a backup of the database.
+
+        Args:
+            backup_path: Path for backup file. If None, uses db_path + '.backup'.
+
+        Returns:
+            True if backup succeeded, False otherwise.
+        """
+        if backup_path is None:
+            backup_path = self.db.db_path + '.backup'
+
+        if self.db.backup(backup_path):
+            logger.info(f"Database backup created at {backup_path}")
+            return True
+        else:
+            logger.warning(f"Failed to create database backup at {backup_path}")
+            return False

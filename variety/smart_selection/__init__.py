@@ -12,6 +12,7 @@ from variety.smart_selection.config import SelectionConfig
 from variety.smart_selection.database import ImageDatabase
 from variety.smart_selection.indexer import ImageIndexer
 from variety.smart_selection.selector import SmartSelector
+from variety.smart_selection.statistics import CollectionStatistics
 from variety.smart_selection.weights import (
     recency_factor,
     source_factor,
@@ -42,6 +43,8 @@ __all__ = [
     'ImageIndexer',
     # Selector
     'SmartSelector',
+    # Statistics
+    'CollectionStatistics',
     # Weight functions
     'recency_factor',
     'source_factor',

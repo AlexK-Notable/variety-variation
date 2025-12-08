@@ -106,9 +106,9 @@ class ImageIndexer:
             filepath = os.path.normpath(filepath)
 
             # Get file metadata
-            stat = os.stat(filepath)
-            file_size = stat.st_size
-            file_mtime = int(stat.st_mtime)
+            file_stat = os.stat(filepath)
+            file_size = file_stat.st_size
+            file_mtime = int(file_stat.st_mtime)
 
             # Get image dimensions
             with Image.open(filepath) as img:
@@ -146,12 +146,16 @@ class ImageIndexer:
         self,
         directory: str,
         recursive: bool = False,
+        batch_size: int = 100,
     ) -> int:
         """Scan and index all images in a directory.
+
+        Uses batch inserts for improved performance when indexing many images.
 
         Args:
             directory: Path to directory to index.
             recursive: If True, index subdirectories too.
+            batch_size: Number of records to batch before inserting (default 100).
 
         Returns:
             Number of images newly indexed or updated.
@@ -159,13 +163,14 @@ class ImageIndexer:
         images = self.scan_directory(directory, recursive)
         indexed_count = 0
         sources_seen: Set[str] = set()
+        batch: List[ImageRecord] = []
 
         for filepath in images:
             # Check if already indexed and unchanged
             existing = self.db.get_image(filepath)
             if existing:
-                stat = os.stat(filepath)
-                if existing.file_mtime == int(stat.st_mtime):
+                file_stat = os.stat(filepath)
+                if existing.file_mtime == int(file_stat.st_mtime):
                     # Unchanged, skip
                     continue
 
@@ -178,21 +183,33 @@ class ImageIndexer:
                     record.times_shown = existing.times_shown
                     record.last_shown_at = existing.last_shown_at
 
-                self.db.upsert_image(record)
+                batch.append(record)
                 indexed_count += 1
 
                 # Track source
                 if record.source_id:
                     sources_seen.add(record.source_id)
 
-        # Create/update source records
+                # Flush batch when full
+                if len(batch) >= batch_size:
+                    self.db.batch_upsert_images(batch)
+                    batch = []
+
+        # Flush remaining batch
+        if batch:
+            self.db.batch_upsert_images(batch)
+
+        # Create/update source records in batch
+        new_sources = []
         for source_id in sources_seen:
             existing_source = self.db.get_source(source_id)
             if not existing_source:
-                self.db.upsert_source(SourceRecord(
+                new_sources.append(SourceRecord(
                     source_id=source_id,
                     source_type=self._detect_source_type(source_id),
                 ))
+        if new_sources:
+            self.db.batch_upsert_sources(new_sources)
 
         return indexed_count
 
