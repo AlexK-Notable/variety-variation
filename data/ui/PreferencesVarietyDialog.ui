@@ -4058,6 +4058,7 @@ Night (22-6): Dark/muted</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
                         <property name="receives_default">True</property>
+                        <property name="tooltip_text" translatable="yes">Delete all indexed data and re-scan all source folders. Use when folders have changed significantly. Palette data will be lost.</property>
                         <signal name="clicked" handler="on_smart_rebuild_index_clicked" swapped="no"/>
                       </object>
                       <packing>
@@ -4072,6 +4073,7 @@ Night (22-6): Dark/muted</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
                         <property name="receives_default">True</property>
+                        <property name="tooltip_text" translatable="yes">Extract color palettes from all indexed images using wallust. Required for color-aware selection features. May take several minutes for large collections.</property>
                         <signal name="clicked" handler="on_smart_extract_palettes_clicked" swapped="no"/>
                       </object>
                       <packing>
@@ -4086,6 +4088,7 @@ Night (22-6): Dark/muted</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
                         <property name="receives_default">True</property>
+                        <property name="tooltip_text" translatable="yes">Reset view counts for all images, giving every wallpaper an equal chance of being selected again. The index and palette data are preserved.</property>
                         <signal name="clicked" handler="on_smart_clear_history_clicked" swapped="no"/>
                       </object>
                       <packing>

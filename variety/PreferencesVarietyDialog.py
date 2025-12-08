@@ -1570,6 +1570,7 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
             # Refresh button
             refresh_button = Gtk.Button(label=_("Refresh"))
+            refresh_button.set_tooltip_text(_("Recalculate collection statistics from current data. Use after extracting palettes or when stats appear outdated."))
             refresh_button.connect("clicked", self.on_smart_refresh_insights_clicked)
             header_box.pack_start(refresh_button, False, False, 0)
 
@@ -1810,6 +1811,26 @@ class PreferencesVarietyDialog(PreferencesDialog):
     def on_smart_rebuild_index_clicked(self, widget=None):
         """Rebuild the Smart Selection image index."""
         if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+            # Show confirmation dialog
+            dialog = Gtk.MessageDialog(
+                self,
+                Gtk.DialogFlags.MODAL,
+                Gtk.MessageType.WARNING,
+                Gtk.ButtonsType.YES_NO,
+                _("Rebuild the entire image index?\n\n"
+                  "This will:\n"
+                  "• Delete all indexed image data\n"
+                  "• Delete all extracted color palettes\n"
+                  "• Re-scan all source folders from scratch\n\n"
+                  "Use this when your wallpaper folders have changed significantly.")
+            )
+            dialog.set_title(_("Rebuild Index"))
+            response = dialog.run()
+            dialog.destroy()
+
+            if response != Gtk.ResponseType.YES:
+                return
+
             def rebuild():
                 try:
                     # Collect all source folders
@@ -1865,6 +1886,30 @@ class PreferencesVarietyDialog(PreferencesDialog):
     def on_smart_extract_palettes_clicked(self, widget=None):
         """Extract color palettes for all indexed images."""
         if not hasattr(self.parent, 'smart_selector') or not self.parent.smart_selector:
+            return
+
+        # Get count of images without palettes for the dialog
+        stats = self.parent.smart_selector.get_statistics()
+        images_without = stats['images_indexed'] - stats['images_with_palettes']
+
+        # Show confirmation dialog
+        dialog = Gtk.MessageDialog(
+            self,
+            Gtk.DialogFlags.MODAL,
+            Gtk.MessageType.INFO,
+            Gtk.ButtonsType.YES_NO,
+            _("Extract color palettes for indexed images?\n\n"
+              "This will:\n"
+              "• Use wallust to analyze {count} images without palettes\n"
+              "• Enable color-aware selection features\n"
+              "• May take several minutes for large collections\n\n"
+              "You can continue using the application while extraction runs.").format(count=images_without)
+        )
+        dialog.set_title(_("Extract Palettes"))
+        response = dialog.run()
+        dialog.destroy()
+
+        if response != Gtk.ResponseType.YES:
             return
 
         # Prevent multiple clicks - disable button during extraction
