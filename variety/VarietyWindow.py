@@ -66,6 +66,7 @@ from variety.VarietyOptionParser import parse_options
 from variety.WelcomeDialog import WelcomeDialog
 from variety.smart_selection import SmartSelector, SelectionConfig, ImageIndexer
 from variety.smart_selection.theming import ThemeEngine
+from variety.smart_selection.wallust_config import get_config_manager
 from variety_lib import varietyconfig
 
 # fmt: off
@@ -582,26 +583,12 @@ class VarietyWindow(Gtk.Window):
     def _get_wallust_palette_type(self) -> str:
         """Get the palette type from wallust configuration.
 
-        Reads ~/.config/wallust/wallust.toml to find the configured palette.
+        Uses centralized WallustConfigManager for caching and change detection.
 
         Returns:
             Palette type string like 'Dark16', 'Light16', etc.
         """
-        config_path = os.path.expanduser('~/.config/wallust/wallust.toml')
-        try:
-            with open(config_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('palette'):
-                        # palette = "dark16" → extract "dark16" → "Dark16"
-                        match = re.search(r'"(\w+)"', line)
-                        if match:
-                            # Convert to title case: dark16 → Dark16
-                            palette = match.group(1)
-                            return palette[0].upper() + palette[1:]
-        except Exception:
-            pass
-        return 'Dark16'  # Default fallback
+        return get_config_manager().get_palette_type()
 
     def _get_smart_color_constraints(self):
         """Generate color constraints based on user settings and time of day.
