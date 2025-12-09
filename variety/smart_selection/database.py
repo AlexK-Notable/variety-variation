@@ -34,7 +34,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -179,9 +179,7 @@ class ImageDatabase:
 
         # Migration map: version -> migration function
         migrations = {
-            # Example for future migrations:
-            # 2: self._migrate_v1_to_v2,
-            # 3: self._migrate_v2_to_v3,
+            2: self._migrate_v1_to_v2,
         }
 
         with self._lock:
@@ -199,15 +197,14 @@ class ImageDatabase:
                     # No migration needed for this version step
                     self._set_schema_version(target_version)
 
-    # Example migration template (commented out):
-    # def _migrate_v1_to_v2(self):
-    #     """Migrate schema from v1 to v2.
-    #
-    #     Example: Add a new column to images table.
-    #     """
-    #     cursor = self.conn.cursor()
-    #     cursor.execute('ALTER TABLE images ADD COLUMN new_field TEXT')
-    #     self.conn.commit()
+    def _migrate_v1_to_v2(self):
+        """Migrate schema from v1 to v2.
+
+        Adds cursor column to palettes table for theming engine support.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute('ALTER TABLE palettes ADD COLUMN cursor TEXT')
+        self.conn.commit()
 
     def close(self):
         """Close the database connection."""
@@ -553,9 +550,9 @@ class ImageDatabase:
                 INSERT INTO palettes (
                     filepath, color0, color1, color2, color3, color4, color5, color6, color7,
                     color8, color9, color10, color11, color12, color13, color14, color15,
-                    background, foreground, avg_hue, avg_saturation, avg_lightness,
+                    background, foreground, cursor, avg_hue, avg_saturation, avg_lightness,
                     color_temperature, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     color0 = excluded.color0, color1 = excluded.color1,
                     color2 = excluded.color2, color3 = excluded.color3,
@@ -566,6 +563,7 @@ class ImageDatabase:
                     color12 = excluded.color12, color13 = excluded.color13,
                     color14 = excluded.color14, color15 = excluded.color15,
                     background = excluded.background, foreground = excluded.foreground,
+                    cursor = excluded.cursor,
                     avg_hue = excluded.avg_hue, avg_saturation = excluded.avg_saturation,
                     avg_lightness = excluded.avg_lightness,
                     color_temperature = excluded.color_temperature,
@@ -576,7 +574,7 @@ class ImageDatabase:
                 record.color4, record.color5, record.color6, record.color7,
                 record.color8, record.color9, record.color10, record.color11,
                 record.color12, record.color13, record.color14, record.color15,
-                record.background, record.foreground,
+                record.background, record.foreground, record.cursor,
                 record.avg_hue, record.avg_saturation, record.avg_lightness,
                 record.color_temperature, record.indexed_at,
             ))
@@ -608,6 +606,7 @@ class ImageDatabase:
                 color12=row['color12'], color13=row['color13'],
                 color14=row['color14'], color15=row['color15'],
                 background=row['background'], foreground=row['foreground'],
+                cursor=row['cursor'],
                 avg_hue=row['avg_hue'], avg_saturation=row['avg_saturation'],
                 avg_lightness=row['avg_lightness'],
                 color_temperature=row['color_temperature'],

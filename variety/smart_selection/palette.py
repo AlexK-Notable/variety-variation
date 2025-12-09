@@ -71,6 +71,60 @@ def hex_to_hsl(hex_color: str) -> Tuple[float, float, float]:
     return (h, s, l)
 
 
+def hsl_to_hex(h: float, s: float, l: float) -> str:
+    """Convert HSL values to hex color string.
+
+    Args:
+        h: Hue in degrees (0-360).
+        s: Saturation (0-1).
+        l: Lightness (0-1).
+
+    Returns:
+        Hex color string like "#FF0000".
+    """
+    # Clamp values to valid ranges
+    h = h % 360
+    s = max(0.0, min(1.0, s))
+    l = max(0.0, min(1.0, l))
+
+    # Achromatic case
+    if s == 0:
+        val = int(l * 255)
+        return f"#{val:02x}{val:02x}{val:02x}"
+
+    def hue_to_rgb(p: float, q: float, t: float) -> float:
+        if t < 0:
+            t += 1
+        if t > 1:
+            t -= 1
+        if t < 1/6:
+            return p + (q - p) * 6 * t
+        if t < 1/2:
+            return q
+        if t < 2/3:
+            return p + (q - p) * (2/3 - t) * 6
+        return p
+
+    q = l * (1 + s) if l < 0.5 else l + s - l * s
+    p = 2 * l - q
+    h_normalized = h / 360
+
+    r = hue_to_rgb(p, q, h_normalized + 1/3)
+    g = hue_to_rgb(p, q, h_normalized)
+    b = hue_to_rgb(p, q, h_normalized - 1/3)
+
+    r_int = int(round(r * 255))
+    g_int = int(round(g * 255))
+    b_int = int(round(b * 255))
+
+    # Clamp to valid range
+    r_int = max(0, min(255, r_int))
+    g_int = max(0, min(255, g_int))
+    b_int = max(0, min(255, b_int))
+
+    return f"#{r_int:02x}{g_int:02x}{b_int:02x}"
+
+
 def calculate_temperature(hue: float, saturation: float, lightness: float) -> float:
     """Calculate color temperature from HSL values.
 
@@ -111,26 +165,75 @@ def calculate_temperature(hue: float, saturation: float, lightness: float) -> fl
     return temp * saturation
 
 
-def parse_wallust_json(json_data: Dict[str, str]) -> Dict[str, Any]:
-    """Parse wallust JSON output and calculate derived metrics.
+def rgb_dict_to_hex(rgb: Dict[str, float]) -> str:
+    """Convert RGB dict with 0-1 float values to hex string.
 
     Args:
-        json_data: Dictionary from wallust JSON output.
+        rgb: Dict with 'red', 'green', 'blue' keys (0-1 float range).
+
+    Returns:
+        Hex color string like "#FF0000".
+    """
+    r = int(rgb.get('red', 0) * 255)
+    g = int(rgb.get('green', 0) * 255)
+    b = int(rgb.get('blue', 0) * 255)
+    # Clamp to valid range
+    r = max(0, min(255, r))
+    g = max(0, min(255, g))
+    b = max(0, min(255, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def parse_wallust_json(json_data) -> Dict[str, Any]:
+    """Parse wallust JSON output and calculate derived metrics.
+
+    Handles two formats:
+    1. Legacy dict format: {"color0": "#RRGGBB", "color1": "#RRGGBB", ...}
+    2. Cache format: [[{"red": 0.9, "green": 0.8, "blue": 0.7}, ...], ...]
+       (list of palettes, each containing RGB dicts with 0-1 float values)
+
+    Args:
+        json_data: Either dict or list from wallust JSON output.
 
     Returns:
         Dictionary with colors and derived metrics.
     """
     result = {}
 
-    # Copy color values
-    for key in ['background', 'foreground', 'cursor']:
-        if key in json_data:
-            result[key] = json_data[key]
+    # Detect and convert cache format (list of palettes)
+    if isinstance(json_data, list) and len(json_data) > 0:
+        # Take the first palette (usually the main one)
+        first_palette = json_data[0]
+        if isinstance(first_palette, list):
+            # Convert RGB dicts to colorN format
+            logger.debug(f"Converting wallust cache format: {len(first_palette)} colors")
+            for i, rgb in enumerate(first_palette[:16]):
+                if isinstance(rgb, dict) and 'red' in rgb:
+                    result[f'color{i}'] = rgb_dict_to_hex(rgb)
+            # Use first color as background, color7 as foreground (common convention)
+            if first_palette:
+                result['background'] = rgb_dict_to_hex(first_palette[0])
+            if len(first_palette) > 7:
+                result['foreground'] = rgb_dict_to_hex(first_palette[7])
+                # Default cursor to foreground
+                result['cursor'] = result['foreground']
+    elif isinstance(json_data, dict):
+        # Legacy format: copy color values directly
+        for key in ['background', 'foreground', 'cursor']:
+            if key in json_data:
+                result[key] = json_data[key]
 
-    for i in range(16):
-        key = f'color{i}'
-        if key in json_data:
-            result[key] = json_data[key]
+        for i in range(16):
+            key = f'color{i}'
+            if key in json_data:
+                result[key] = json_data[key]
+
+        # Fallback: cursor defaults to foreground if not provided
+        if 'cursor' not in result and 'foreground' in result:
+            result['cursor'] = result['foreground']
+    else:
+        logger.warning(f"Unknown wallust JSON format: {type(json_data)}")
+        return result
 
     # Calculate average metrics from the 16 colors
     hues = []
@@ -342,6 +445,7 @@ def create_palette_record(filepath: str, palette_data: Dict[str, Any]) -> Palett
         color15=palette_data.get('color15'),
         background=palette_data.get('background'),
         foreground=palette_data.get('foreground'),
+        cursor=palette_data.get('cursor'),
         avg_hue=palette_data.get('avg_hue'),
         avg_saturation=palette_data.get('avg_saturation'),
         avg_lightness=palette_data.get('avg_lightness'),

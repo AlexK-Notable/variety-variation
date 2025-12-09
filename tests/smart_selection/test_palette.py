@@ -69,6 +69,88 @@ class TestHexToHSL(unittest.TestCase):
         self.assertAlmostEqual(h, 0, places=1)
 
 
+class TestHSLToHex(unittest.TestCase):
+    """Tests for hsl_to_hex color conversion."""
+
+    def test_import_hsl_to_hex(self):
+        """hsl_to_hex can be imported from palette module."""
+        from variety.smart_selection.palette import hsl_to_hex
+        self.assertIsNotNone(hsl_to_hex)
+
+    def test_hsl_to_hex_red(self):
+        """Pure red HSL converts to correct hex."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        result = hsl_to_hex(0, 1.0, 0.5)
+        self.assertEqual(result.lower(), "#ff0000")
+
+    def test_hsl_to_hex_green(self):
+        """Pure green HSL converts to correct hex."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        result = hsl_to_hex(120, 1.0, 0.5)
+        self.assertEqual(result.lower(), "#00ff00")
+
+    def test_hsl_to_hex_blue(self):
+        """Pure blue HSL converts to correct hex."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        result = hsl_to_hex(240, 1.0, 0.5)
+        self.assertEqual(result.lower(), "#0000ff")
+
+    def test_hsl_to_hex_white(self):
+        """White HSL converts to correct hex."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        result = hsl_to_hex(0, 0.0, 1.0)
+        self.assertEqual(result.lower(), "#ffffff")
+
+    def test_hsl_to_hex_black(self):
+        """Black HSL converts to correct hex."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        result = hsl_to_hex(0, 0.0, 0.0)
+        self.assertEqual(result.lower(), "#000000")
+
+    def test_hsl_to_hex_gray(self):
+        """Gray HSL converts to correct hex."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        result = hsl_to_hex(0, 0.0, 0.5)
+        # Should be ~#808080 (50% gray), allow ±1 for rounding
+        # int(0.5 * 255) = 127 = 0x7f
+        self.assertIn(result.lower(), ["#7f7f7f", "#808080"])
+
+    def test_roundtrip_conversion(self):
+        """Converting hex to HSL and back gives same color."""
+        from variety.smart_selection.palette import hex_to_hsl, hsl_to_hex
+
+        original_colors = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00",
+                         "#FF00FF", "#00FFFF", "#808080", "#FFFFFF", "#000000"]
+
+        for original in original_colors:
+            h, s, l = hex_to_hsl(original)
+            result = hsl_to_hex(h, s, l)
+            self.assertEqual(result.lower(), original.lower(),
+                           f"Roundtrip failed for {original}")
+
+    def test_hsl_to_hex_clamps_values(self):
+        """hsl_to_hex clamps out-of-range values."""
+        from variety.smart_selection.palette import hsl_to_hex
+
+        # Negative lightness should clamp to 0 (black)
+        result = hsl_to_hex(0, 1.0, -0.5)
+        self.assertEqual(result.lower(), "#000000")
+
+        # Lightness > 1 should clamp to 1 (white)
+        result = hsl_to_hex(0, 0.0, 1.5)
+        self.assertEqual(result.lower(), "#ffffff")
+
+        # Saturation > 1 should clamp to 1
+        result = hsl_to_hex(0, 1.5, 0.5)
+        self.assertEqual(result.lower(), "#ff0000")
+
+
 class TestColorTemperature(unittest.TestCase):
     """Tests for color temperature calculation."""
 
@@ -163,6 +245,49 @@ class TestParsePalette(unittest.TestCase):
         self.assertIn('avg_saturation', result)
         self.assertIn('avg_lightness', result)
         self.assertIn('color_temperature', result)
+
+    def test_parse_wallust_json_rgb_list_format(self):
+        """parse_wallust_json handles RGB list format from wallust cache."""
+        from variety.smart_selection.palette import parse_wallust_json
+
+        # Simulate wallust cache format: [[{RGB}, {RGB}, ...], ...]
+        # This is the format stored in ~/.cache/wallust/{hash}/FastResize_*
+        rgb_cache_data = [
+            [
+                {"red": 1.0, "green": 0.0, "blue": 0.0},      # Red
+                {"red": 0.0, "green": 1.0, "blue": 0.0},      # Green
+                {"red": 0.0, "green": 0.0, "blue": 1.0},      # Blue
+                {"red": 1.0, "green": 1.0, "blue": 0.0},      # Yellow
+                {"red": 0.5, "green": 0.5, "blue": 0.5},      # Gray
+                {"red": 0.0, "green": 1.0, "blue": 1.0},      # Cyan
+            ],
+            # Additional palettes (light/dark variants)
+            [],
+        ]
+
+        result = parse_wallust_json(rgb_cache_data)
+
+        # Should convert RGB floats to hex
+        self.assertEqual(result['color0'], "#ff0000")  # Red
+        self.assertEqual(result['color1'], "#00ff00")  # Green
+        self.assertEqual(result['color2'], "#0000ff")  # Blue
+        self.assertEqual(result['color3'], "#ffff00")  # Yellow
+
+        # Should calculate metrics
+        self.assertIn('avg_hue', result)
+        self.assertIn('avg_saturation', result)
+        self.assertIn('avg_lightness', result)
+        self.assertIn('color_temperature', result)
+
+    def test_parse_wallust_json_empty_input(self):
+        """parse_wallust_json handles empty input gracefully."""
+        from variety.smart_selection.palette import parse_wallust_json
+
+        result = parse_wallust_json([])
+        self.assertEqual(result, {})
+
+        result = parse_wallust_json({})
+        self.assertEqual(result, {})
 
 
 class TestPaletteExtractor(unittest.TestCase):

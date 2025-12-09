@@ -75,6 +75,7 @@ class PaletteRecord:
         color0-color15: The 16 wallust palette colors as hex strings.
         background: Background color from wallust.
         foreground: Foreground color from wallust.
+        cursor: Cursor color from wallust.
         avg_hue: Average hue across palette (0-360, circular mean).
         avg_saturation: Average saturation (0-1).
         avg_lightness: Average lightness (0-1).
@@ -100,6 +101,7 @@ class PaletteRecord:
     color15: Optional[str] = None
     background: Optional[str] = None
     foreground: Optional[str] = None
+    cursor: Optional[str] = None
     avg_hue: Optional[float] = None
     avg_saturation: Optional[float] = None
     avg_lightness: Optional[float] = None

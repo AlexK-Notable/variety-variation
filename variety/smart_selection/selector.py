@@ -225,6 +225,16 @@ class SmartSelector:
 
             filtered.append(img)
 
+        # Log color filtering results
+        if constraints and constraints.target_palette:
+            before_count = len(candidates)
+            after_count = len(filtered)
+            excluded = before_count - after_count
+            logger.debug(
+                f"Color filter: {after_count}/{before_count} candidates passed "
+                f"(excluded {excluded}, threshold={constraints.min_color_similarity:.0%})"
+            )
+
         return filtered
 
     def record_shown(self, filepath: str, wallust_palette: Dict[str, Any] = None):
