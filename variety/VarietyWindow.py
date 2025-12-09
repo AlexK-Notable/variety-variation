@@ -65,6 +65,7 @@ from variety.Util import Util, _, debounce, on_gtk, throttle
 from variety.VarietyOptionParser import parse_options
 from variety.WelcomeDialog import WelcomeDialog
 from variety.smart_selection import SmartSelector, SelectionConfig, ImageIndexer
+from variety.smart_selection.theming import ThemeEngine
 from variety_lib import varietyconfig
 
 # fmt: off
@@ -431,6 +432,99 @@ class VarietyWindow(Gtk.Window):
             logger.warning(lambda: f"Smart Selection Engine failed to initialize: {e}")
             self.smart_selector = None
 
+    def _init_theme_engine(self):
+        """Initialize the Theme Engine for pre-generating wallust templates.
+
+        The theme engine reads palette data from our database and applies
+        it to wallust templates, eliminating the need to run wallust on
+        every wallpaper change.
+        """
+        try:
+            # Check if theming is enabled in preferences
+            if not getattr(self.options, 'smart_theming_enabled', True):
+                self.theme_engine = None
+                logger.debug(lambda: "Theme Engine disabled in preferences")
+                return
+
+            # Close existing engine if reloading
+            if hasattr(self, 'theme_engine') and self.theme_engine:
+                try:
+                    self.theme_engine.cleanup()
+                except Exception:
+                    pass
+
+            # Create callback to get palette from database
+            def get_palette_from_db(image_path: str):
+                if not hasattr(self, 'smart_selector') or not self.smart_selector:
+                    return None
+                try:
+                    record = self.smart_selector.db.get_palette(image_path)
+                    if record:
+                        # Convert PaletteRecord to dict for ThemeEngine
+                        palette = {}
+                        for i in range(16):
+                            color = getattr(record, f'color{i}', None)
+                            if color:
+                                palette[f'color{i}'] = color
+                        if record.background:
+                            palette['background'] = record.background
+                        if record.foreground:
+                            palette['foreground'] = record.foreground
+                        if record.cursor:
+                            palette['cursor'] = record.cursor
+                        return palette if palette else None
+                except Exception as e:
+                    logger.debug(lambda: f"Theme Engine: Failed to get palette: {e}")
+                return None
+
+            self.theme_engine = ThemeEngine(get_palette_from_db)
+            template_count = len(self.theme_engine.get_enabled_templates())
+            logger.info(lambda: f"Theme Engine initialized with {template_count} templates")
+
+        except Exception as e:
+            logger.warning(lambda: f"Theme Engine failed to initialize: {e}")
+            self.theme_engine = None
+
+    def _apply_theme_command(self, target: str):
+        """Apply color theme for a specific image or current wallpaper.
+
+        Args:
+            target: Image path or 'current' for the current wallpaper.
+        """
+        if not hasattr(self, 'theme_engine') or not self.theme_engine:
+            logger.warning(lambda: "Theme Engine not initialized")
+            self.show_notification(_("Theme Engine"), _("Theme Engine is not initialized"))
+            return
+
+        # Resolve target path
+        if target.lower() == 'current':
+            image_path = self.current if self.current else None
+            if not image_path:
+                logger.warning(lambda: "No current wallpaper to apply theme for")
+                self.show_notification(_("Theme Engine"), _("No current wallpaper"))
+                return
+        else:
+            image_path = os.path.abspath(target)
+            if not os.path.isfile(image_path):
+                logger.warning(lambda: f"Image not found: {image_path}")
+                self.show_notification(_("Theme Engine"), _("Image not found: ") + target)
+                return
+
+        # Apply theme without debouncing (immediate for CLI)
+        try:
+            success = self.theme_engine.apply(image_path, debounce=False)
+            if success:
+                logger.info(lambda: f"Applied theme for: {image_path}")
+            else:
+                logger.warning(lambda: f"Theme apply returned False for: {image_path}")
+                self.show_notification(
+                    _("Theme Engine"),
+                    _("No palette cached for this image")
+                )
+        except Exception as e:
+            logger.exception(lambda: f"Failed to apply theme: {e}")
+            self.show_notification(_("Theme Engine"), _("Failed to apply theme"))
+
     def _read_wallust_cache_for_image(self, filepath: str):
         """Read color palette from wallust's cache directory.
 
@@ -469,11 +563,16 @@ class VarietyWindow(Gtk.Window):
 
             if latest_file:
                 # Only use if modified in the last 5 seconds (recent wallust run)
-                if time.time() - latest_time < 5.0:
+                age = time.time() - latest_time
+                if age < 5.0:
                     with open(latest_file, 'r') as f:
-                        return json.load(f)
+                        palette_data = json.load(f)
+                    logger.debug(lambda: f"Read wallust palette from {os.path.basename(latest_file)} (age={age:.1f}s)")
+                    return palette_data
                 else:
-                    logger.debug(lambda: f"Wallust cache too old ({time.time() - latest_time:.1f}s)")
+                    logger.debug(lambda: f"Wallust cache too old ({age:.1f}s > 5s threshold)")
+            else:
+                logger.debug(lambda: f"No wallust cache found for palette type '{palette_type}'")
 
         except Exception as e:
             logger.debug(lambda: f"Failed to read wallust cache: {e}")
@@ -515,6 +614,7 @@ class VarietyWindow(Gtk.Window):
 
         # Check if color selection is enabled
         if not getattr(self.options, 'smart_color_enabled', False):
+            logger.debug(lambda: "Color selection disabled in options")
             return None
 
         # Get similarity threshold (convert 0-100 to 0-1)
@@ -522,6 +622,7 @@ class VarietyWindow(Gtk.Window):
 
         # Get temperature preference
         temperature = getattr(self.options, 'smart_color_temperature', 'neutral')
+        logger.info(lambda: f"Color selection: mode={temperature}, min_similarity={min_similarity:.0%}")
 
         # Define target palette based on preference
         if temperature == 'adaptive':
@@ -529,6 +630,7 @@ class VarietyWindow(Gtk.Window):
             hour = datetime.now().hour
 
             if 6 <= hour < 12:  # Morning (cool, bright)
+                period = "morning"
                 target_palette = {
                     'avg_hue': 200,  # Blue-cyan range
                     'avg_saturation': 0.4,
@@ -536,6 +638,7 @@ class VarietyWindow(Gtk.Window):
                     'color_temperature': -0.3,  # Cool
                 }
             elif 12 <= hour < 18:  # Afternoon (neutral)
+                period = "afternoon"
                 target_palette = {
                     'avg_hue': 120,  # Green range (neutral)
                     'avg_saturation': 0.4,
@@ -543,6 +646,7 @@ class VarietyWindow(Gtk.Window):
                     'color_temperature': 0.0,  # Neutral
                 }
             elif 18 <= hour < 22:  # Evening (warm, darker)
+                period = "evening"
                 target_palette = {
                     'avg_hue': 30,  # Orange-yellow range
                     'avg_saturation': 0.5,
@@ -550,12 +654,14 @@ class VarietyWindow(Gtk.Window):
                     'color_temperature': 0.5,  # Warm
                 }
             else:  # Night (neutral, dark)
+                period = "night"
                 target_palette = {
                     'avg_hue': 240,  # Blue-purple range
                     'avg_saturation': 0.3,
                     'avg_lightness': 0.25,
                     'color_temperature': 0.0,  # Neutral
                 }
+            logger.info(lambda: f"Adaptive mode: {period} (hour={hour}), target_hue={target_palette['avg_hue']}")
         elif temperature == 'warm':
             target_palette = {
                 'avg_hue': 30,  # Orange-yellow range
@@ -705,6 +811,17 @@ class VarietyWindow(Gtk.Window):
         # On startup: do full init with indexing
         # On config reload: just update config, don't re-index
         self._init_smart_selector(update_config_only=not is_on_start)
+
+        # Initialize Theme Engine (depends on smart selector for database access)
+        if is_on_start:
+            self._init_theme_engine()
+        else:
+            # On config reload, refresh the theme engine's config
+            if hasattr(self, 'theme_engine') and self.theme_engine:
+                try:
+                    self.theme_engine.reload_config()
+                except Exception as e:
+                    logger.debug(lambda: f"Theme Engine reload_config failed: {e}")
 
         self.downloaders = []
         self.download_folder_size = None
@@ -1864,6 +1981,13 @@ class VarietyWindow(Gtk.Window):
                         except Exception as e:
                             logger.debug(lambda: f"Smart Selection record_shown failed: {e}")
 
+                    # Apply theme AFTER record_shown stores the palette in database
+                    if hasattr(self, 'theme_engine') and self.theme_engine:
+                        try:
+                            self.theme_engine.apply(filename)
+                        except Exception as e:
+                            logger.debug(lambda: f"Theme Engine apply failed: {e}")
+
                 if self.options.icon == "Current" and self.current:
 
                     def _set_icon_to_current():
@@ -1908,10 +2032,24 @@ class VarietyWindow(Gtk.Window):
                     else:
                         logger.debug(lambda: f"Smart Selection: Selected {len(selected)} images")
                     return selected
+                else:
+                    # No results - log why
+                    if constraints and constraints.target_palette:
+                        # Color filtering returned no matches
+                        palette_count = self.smart_selector.db.count_images_with_palettes()
+                        total_images = self.smart_selector.db.count_images()
+                        logger.warning(
+                            lambda: f"Color selection returned 0 results. "
+                            f"Images with palettes: {palette_count}/{total_images}. "
+                            f"Try lowering similarity threshold or showing more wallpapers to index palettes."
+                        )
+                    else:
+                        logger.debug(lambda: "Smart Selection returned empty, using random fallback")
             except Exception as e:
                 logger.warning(lambda: f"Smart Selection failed, falling back to random: {e}")
 
         # Fallback to random shuffle
+        logger.debug(lambda: f"Using random selection from {len(all_images)} images")
         random.shuffle(all_images)
         return all_images[:count]
 
@@ -2716,6 +2854,14 @@ class VarietyWindow(Gtk.Window):
             except Exception:
                 logger.exception(lambda: "Could not close Smart Selection Engine")
 
+            try:
+                if hasattr(self, 'theme_engine') and self.theme_engine:
+                    logger.debug(lambda: "Cleaning up Theme Engine")
+                    self.theme_engine.cleanup()
+                    self.theme_engine = None
+            except Exception:
+                logger.exception(lambda: "Could not cleanup Theme Engine")
+
             if self.options.clock_enabled or self.options.quotes_enabled:
                 self.options.clock_enabled = False
                 self.options.quotes_enabled = False
@@ -3018,6 +3164,9 @@ class VarietyWindow(Gtk.Window):
 
                 if options.quotes_save_favorite:
                     self.quote_save_to_favorites()
+
+                if options.apply_theme:
+                    self._apply_theme_command(options.apply_theme)
 
             GObject.timeout_add(3000 if initial_run else 1, _process_command)
 

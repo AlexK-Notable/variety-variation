@@ -257,6 +257,17 @@ To set a specific wallpaper: %prog --set /some/local/image.jpg
         ),
     )
 
+    parser.add_option(
+        "--apply-theme",
+        action="store",
+        dest="apply_theme",
+        help=_(
+            "Apply color theme for the specified image or 'current' for the current wallpaper. "
+            "Generates templates from cached color palette. "
+            "Example: 'variety --apply-theme current' or 'variety --apply-theme /path/to/image.jpg'"
+        ),
+    )
+
     options, args = parser.parse_args(arguments)
 
     if report_errors:
