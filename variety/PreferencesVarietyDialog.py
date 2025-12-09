@@ -360,6 +360,11 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.ui.smart_color_similarity.set_value(self.options.smart_color_similarity)
             self.ui.smart_time_adaptation.set_active(self.options.smart_time_adaptation)
 
+            # Theming Engine settings
+            if hasattr(self.options, 'smart_theming_enabled'):
+                self.ui.smart_theming_enabled.set_active(self.options.smart_theming_enabled)
+            self.update_smart_theming_templates_label()
+
             # Update Smart Selection labels
             self.update_smart_image_cooldown_label()
             self.update_smart_source_cooldown_label()
@@ -1212,6 +1217,10 @@ class PreferencesVarietyDialog(PreferencesDialog):
             )
             self.options.smart_time_adaptation = self.ui.smart_time_adaptation.get_active()
 
+            # Theming Engine settings
+            if hasattr(self.ui, 'smart_theming_enabled'):
+                self.options.smart_theming_enabled = self.ui.smart_theming_enabled.get_active()
+
             self.options.write()
 
             if not self.parent.running:
@@ -2009,6 +2018,68 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         dialog.run()
         dialog.destroy()
+
+    def on_smart_theming_enabled_toggled(self, widget=None):
+        """Toggle sensitivity of theming controls."""
+        enabled = self.ui.smart_theming_enabled.get_active()
+        self.ui.smart_theming_configure.set_sensitive(enabled)
+        self.ui.smart_theming_templates_label.set_sensitive(enabled)
+
+        if hasattr(self.parent, 'theme_engine'):
+            if enabled:
+                self.parent._init_theme_engine()
+            else:
+                if self.parent.theme_engine:
+                    self.parent.theme_engine.cleanup()
+                    self.parent.theme_engine = None
+
+    def update_smart_theming_templates_label(self):
+        """Update the templates count label."""
+        if hasattr(self.parent, 'theme_engine') and self.parent.theme_engine:
+            all_templates = self.parent.theme_engine.get_all_templates()
+            enabled_templates = self.parent.theme_engine.get_enabled_templates()
+            self.ui.smart_theming_templates_label.set_text(
+                _("Templates: {} enabled of {}").format(len(enabled_templates), len(all_templates))
+            )
+        else:
+            wallust_config = os.path.expanduser('~/.config/wallust/wallust.toml')
+            if os.path.exists(wallust_config):
+                self.ui.smart_theming_templates_label.set_text(_("Templates: Not loaded"))
+            else:
+                self.ui.smart_theming_templates_label.set_text(_("Templates: wallust.toml not found"))
+
+    def on_smart_theming_configure_clicked(self, widget=None):
+        """Open theming configuration dialog or file."""
+        import subprocess
+
+        theming_json = os.path.expanduser('~/.config/variety/theming.json')
+        wallust_toml = os.path.expanduser('~/.config/wallust/wallust.toml')
+
+        if os.path.exists(theming_json):
+            target = theming_json
+        elif os.path.exists(wallust_toml):
+            target = wallust_toml
+        else:
+            dialog = Gtk.MessageDialog(
+                self,
+                Gtk.DialogFlags.MODAL,
+                Gtk.MessageType.INFO,
+                Gtk.ButtonsType.OK,
+                _("Theming Configuration\n\n"
+                  "To configure theming:\n\n"
+                  "1. Install wallust\n"
+                  "2. Create ~/.config/wallust/wallust.toml\n"
+                  "3. Optionally create ~/.config/variety/theming.json")
+            )
+            dialog.set_title(_("Theming Setup"))
+            dialog.run()
+            dialog.destroy()
+            return
+
+        try:
+            subprocess.Popen(['xdg-open', target])
+        except Exception:
+            logger.exception("Could not open {}".format(target))
 
     def on_smart_clear_history_clicked(self, widget=None):
         """Clear the Smart Selection history."""

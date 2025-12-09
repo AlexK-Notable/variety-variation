@@ -3948,6 +3948,107 @@ Night (22-6): Dark/muted</property>
                     <property name="position">13</property>
                   </packing>
                 </child>
+                <!-- Theming Engine Section -->
+                <child>
+                  <object class="GtkLabel" id="smart_theming_label">
+                    <property name="visible">True</property>
+                    <property name="can_focus">False</property>
+                    <property name="halign">start</property>
+                    <property name="margin_left">15</property>
+                    <property name="margin_top">15</property>
+                    <property name="label" translatable="yes">Theming Engine</property>
+                    <attributes>
+                      <attribute name="weight" value="bold"/>
+                    </attributes>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">14</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkCheckButton" id="smart_theming_enabled">
+                    <property name="label" translatable="yes">Enable instant theme switching</property>
+                    <property name="visible">True</property>
+                    <property name="can_focus">True</property>
+                    <property name="receives_default">False</property>
+                    <property name="halign">start</property>
+                    <property name="margin_left">30</property>
+                    <property name="draw_indicator">True</property>
+                    <property name="tooltip_text" translatable="yes">Apply wallust templates automatically when wallpaper changes. Enables instant theming without spawning wallust process.</property>
+                    <signal name="toggled" handler="delayed_apply" swapped="no"/>
+                    <signal name="toggled" handler="on_smart_theming_enabled_toggled" swapped="no"/>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">15</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkBox" id="smart_theming_templates_box">
+                    <property name="visible">True</property>
+                    <property name="can_focus">False</property>
+                    <property name="margin_left">30</property>
+                    <property name="margin_right">15</property>
+                    <property name="spacing">10</property>
+                    <child>
+                      <object class="GtkLabel" id="smart_theming_templates_label">
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="halign">start</property>
+                        <property name="label" translatable="yes">Templates: 0 configured</property>
+                      </object>
+                      <packing>
+                        <property name="expand">True</property>
+                        <property name="fill">True</property>
+                        <property name="position">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkButton" id="smart_theming_configure">
+                        <property name="label" translatable="yes">Configure...</property>
+                        <property name="visible">True</property>
+                        <property name="can_focus">True</property>
+                        <property name="receives_default">True</property>
+                        <property name="tooltip_text" translatable="yes">Open theming configuration file</property>
+                        <signal name="clicked" handler="on_smart_theming_configure_clicked" swapped="no"/>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">1</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">16</property>
+                  </packing>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="smart_theming_description">
+                    <property name="visible">True</property>
+                    <property name="can_focus">False</property>
+                    <property name="halign">start</property>
+                    <property name="margin_left">30</property>
+                    <property name="margin_right">30</property>
+                    <property name="margin_top">5</property>
+                    <property name="label" translatable="yes">Uses cached palettes to generate terminal, bar, and app themes instantly without running wallust.</property>
+                    <property name="wrap">True</property>
+                    <property name="max_width_chars">60</property>
+                    <style>
+                      <class name="dim-label"/>
+                    </style>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">17</property>
+                  </packing>
+                </child>
                 <!-- Statistics Section -->
                 <child>
                   <object class="GtkLabel" id="smart_stats_label">
@@ -3964,7 +4065,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">14</property>
+                    <property name="position">18</property>
                   </packing>
                 </child>
                 <!-- Stats display -->
@@ -4022,7 +4123,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">15</property>
+                    <property name="position">19</property>
                   </packing>
                 </child>
                 <!-- Collection Insights Section -->
@@ -4040,7 +4141,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">16</property>
+                    <property name="position">20</property>
                   </packing>
                 </child>
                 <!-- Action Buttons -->
@@ -4101,7 +4202,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">17</property>
+                    <property name="position">21</property>
                   </packing>
                 </child>
                 <!-- Extraction Progress Section -->
@@ -4144,7 +4245,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">18</property>
+                    <property name="position">22</property>
                   </packing>
                 </child>
                 <!-- Preview Section - Simple button to open popout window -->
@@ -4157,7 +4258,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">19</property>
+                    <property name="position">23</property>
                   </packing>
                 </child>
                 <child>
@@ -4231,7 +4332,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">20</property>
+                    <property name="position">24</property>
                   </packing>
                 </child>
               </object>

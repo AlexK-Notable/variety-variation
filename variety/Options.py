@@ -355,6 +355,11 @@ class Options:
                 pass
 
             try:
+                self.smart_theming_enabled = config["smart_theming_enabled"].lower() in TRUTH_VALUES
+            except Exception:
+                pass
+
+            try:
                 self.copyto_enabled = config["copyto_enabled"].lower() in TRUTH_VALUES
             except Exception:
                 pass
@@ -758,6 +763,7 @@ class Options:
         self.smart_color_temperature = "adaptive"
         self.smart_color_similarity = 50
         self.smart_time_adaptation = True
+        self.smart_theming_enabled = True
 
         self.copyto_enabled = False
         self.copyto_folder = "Default"
@@ -891,6 +897,7 @@ class Options:
             config["smart_color_temperature"] = self.smart_color_temperature
             config["smart_color_similarity"] = str(self.smart_color_similarity)
             config["smart_time_adaptation"] = str(self.smart_time_adaptation)
+            config["smart_theming_enabled"] = str(self.smart_theming_enabled)
 
             config["copyto_enabled"] = str(self.copyto_enabled)
             config["copyto_folder"] = Util.collapseuser(self.copyto_folder)
