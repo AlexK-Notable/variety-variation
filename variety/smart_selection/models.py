@@ -136,3 +136,19 @@ class SelectionConstraints:
     min_color_similarity: Optional[float] = None
     sources: Optional[List[str]] = None
     favorites_only: bool = False
+
+
+@dataclass
+class IndexingResult:
+    """Result of an incremental indexing operation.
+
+    Attributes:
+        added: Number of new files indexed.
+        updated: Number of existing files re-indexed (mtime changed).
+        removed: Number of files removed from index (no longer on disk).
+        errors: Number of files that failed to index.
+    """
+    added: int = 0
+    updated: int = 0
+    removed: int = 0
+    errors: int = 0

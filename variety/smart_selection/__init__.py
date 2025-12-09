@@ -7,6 +7,7 @@ from variety.smart_selection.models import (
     SourceRecord,
     PaletteRecord,
     SelectionConstraints,
+    IndexingResult,
 )
 from variety.smart_selection.config import SelectionConfig
 from variety.smart_selection.database import ImageDatabase
@@ -35,6 +36,7 @@ __all__ = [
     'SourceRecord',
     'PaletteRecord',
     'SelectionConstraints',
+    'IndexingResult',
     # Config
     'SelectionConfig',
     # Database

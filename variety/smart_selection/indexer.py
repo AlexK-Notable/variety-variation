@@ -8,12 +8,12 @@ the database with ImageRecords.
 import os
 import time
 import logging
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Callable, Iterator
 
 from PIL import Image
 
 from variety.smart_selection.database import ImageDatabase
-from variety.smart_selection.models import ImageRecord, SourceRecord
+from variety.smart_selection.models import ImageRecord, SourceRecord, IndexingResult
 
 logger = logging.getLogger(__name__)
 
@@ -249,3 +249,198 @@ class ImageIndexer:
             'images_with_palettes': len(images_with_palettes),
             'favorites_count': sum(1 for img in all_images if img.is_favorite),
         }
+
+    def index_directory_incremental(
+        self,
+        directory: str,
+        recursive: bool = True,
+        batch_size: int = 500,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> IndexingResult:
+        """Incrementally index a directory with progress reporting.
+
+        Efficiently handles large directories by:
+        - Loading existing index into memory for O(1) mtime comparison
+        - Using generators to avoid loading all paths into memory
+        - Processing in batches to limit memory usage
+        - Detecting and removing deleted files
+        - Preserving selection history when re-indexing modified files
+
+        Args:
+            directory: Directory path to index.
+            recursive: If True, scan subdirectories.
+            batch_size: Number of files to process per batch.
+            progress_callback: Optional callback(current, total, message)
+                for progress reporting.
+
+        Returns:
+            IndexingResult with counts of added, updated, removed files.
+        """
+        directory = os.path.normpath(directory)
+        if not os.path.isdir(directory):
+            return IndexingResult()
+
+        result = IndexingResult()
+
+        # Step 1: Load existing index for this directory (O(1) lookup)
+        indexed_mtime = self.db.get_indexed_mtime_map(directory)
+        indexed_paths = set(indexed_mtime.keys())
+
+        # Step 2: Scan directory and categorize files
+        disk_paths: Set[str] = set()
+        to_index: List[str] = []
+        to_update: List[str] = []
+
+        for filepath in self._scan_directory_generator(directory, recursive):
+            disk_paths.add(filepath)
+
+            if filepath not in indexed_paths:
+                to_index.append(filepath)
+            else:
+                try:
+                    current_mtime = int(os.stat(filepath).st_mtime)
+                    if current_mtime != indexed_mtime.get(filepath):
+                        to_update.append(filepath)
+                except OSError:
+                    pass
+
+        # Step 3: Find deleted files
+        to_delete = list(indexed_paths - disk_paths)
+
+        # Step 4: Calculate total work
+        total_work = len(to_index) + len(to_update) + len(to_delete)
+        processed = 0
+
+        # Track sources for batch creation
+        sources_seen: Set[str] = set()
+
+        # Step 5: Index new files in batches
+        for batch in self._batch(to_index, batch_size):
+            records = []
+            for filepath in batch:
+                record = self.index_image(filepath)
+                if record:
+                    records.append(record)
+                    if record.source_id:
+                        sources_seen.add(record.source_id)
+                else:
+                    result.errors += 1
+
+            if records:
+                self.db.batch_upsert_images(records)
+                result.added += len(records)
+
+            processed += len(batch)
+            if progress_callback:
+                progress_callback(processed, total_work, "Indexing new files...")
+
+        # Step 6: Update modified files in batches (preserve history)
+        for batch in self._batch(to_update, batch_size):
+            records = []
+            for filepath in batch:
+                existing = self.db.get_image(filepath)
+                new_record = self.index_image(filepath)
+                if new_record and existing:
+                    # Preserve selection history
+                    new_record.first_indexed_at = existing.first_indexed_at
+                    new_record.times_shown = existing.times_shown
+                    new_record.last_shown_at = existing.last_shown_at
+                    records.append(new_record)
+                    if new_record.source_id:
+                        sources_seen.add(new_record.source_id)
+                elif new_record:
+                    records.append(new_record)
+                    if new_record.source_id:
+                        sources_seen.add(new_record.source_id)
+                else:
+                    result.errors += 1
+
+            if records:
+                self.db.batch_upsert_images(records)
+                result.updated += len(records)
+
+            processed += len(batch)
+            if progress_callback:
+                progress_callback(processed, total_work, "Updating modified files...")
+
+        # Step 7: Delete removed files
+        if to_delete:
+            self.db.batch_delete_images(to_delete)
+            result.removed = len(to_delete)
+            processed += len(to_delete)
+            if progress_callback:
+                progress_callback(processed, total_work, "Cleaning up removed files...")
+
+        # Step 8: Create new source records
+        new_sources = []
+        for source_id in sources_seen:
+            existing_source = self.db.get_source(source_id)
+            if not existing_source:
+                new_sources.append(SourceRecord(
+                    source_id=source_id,
+                    source_type=self._detect_source_type(source_id),
+                ))
+        if new_sources:
+            self.db.batch_upsert_sources(new_sources)
+
+        return result
+
+    def _scan_directory_generator(
+        self,
+        directory: str,
+        recursive: bool = True
+    ) -> Iterator[str]:
+        """Generator that yields file paths without loading all into memory.
+
+        Uses os.walk for recursive scanning and os.scandir for non-recursive,
+        both of which are memory-efficient.
+
+        Args:
+            directory: Directory to scan.
+            recursive: If True, include subdirectories.
+
+        Yields:
+            Absolute paths to image files.
+        """
+        directory = os.path.normpath(directory)
+
+        if recursive:
+            for root, _, files in os.walk(directory):
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    if self._is_image_file(filepath):
+                        yield filepath
+        else:
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if entry.is_file() and self._is_image_file(entry.path):
+                            yield entry.path
+            except OSError:
+                pass
+
+    def _is_image_file(self, filepath: str) -> bool:
+        """Check if a file is a supported image format.
+
+        Args:
+            filepath: Path to the file.
+
+        Returns:
+            True if the file has a supported image extension.
+        """
+        _, ext = os.path.splitext(filepath)
+        return ext.lower() in IMAGE_EXTENSIONS
+
+    @staticmethod
+    def _batch(items: List[Any], size: int) -> Iterator[List[Any]]:
+        """Yield successive batches from a list.
+
+        Args:
+            items: List to batch.
+            size: Maximum batch size.
+
+        Yields:
+            Lists of at most `size` items.
+        """
+        for i in range(0, len(items), size):
+            yield items[i:i+size]

@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 import os
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from variety.smart_selection.models import (
     ImageRecord,
@@ -1089,4 +1089,59 @@ class ImageDatabase:
                 (r.source_id, r.source_type, r.last_shown_at, r.times_shown)
                 for r in records
             ])
+            self.conn.commit()
+
+    def get_indexed_mtime_map(self, folder_prefix: str) -> Dict[str, int]:
+        """Get filepath→mtime mapping for files under a folder prefix.
+
+        Enables O(1) lookup instead of O(n) queries per file.
+        For 10,000 files: ~20MB memory, saves ~10,000 DB queries.
+
+        Args:
+            folder_prefix: Folder path prefix to filter by (e.g., '/home/user/Pictures/')
+
+        Returns:
+            Dictionary mapping filepath to file_mtime
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            # Ensure prefix ends with separator for accurate matching
+            if folder_prefix and not folder_prefix.endswith(os.sep):
+                folder_prefix = folder_prefix + os.sep
+            cursor.execute(
+                'SELECT filepath, file_mtime FROM images WHERE filepath LIKE ?',
+                (folder_prefix + '%',)
+            )
+            return {row['filepath']: row['file_mtime'] for row in cursor.fetchall()}
+
+    def batch_delete_images(self, filepaths: List[str]):
+        """Delete multiple images in a single transaction.
+
+        Also removes associated palette records for deleted images.
+
+        Args:
+            filepaths: List of filepaths to delete
+        """
+        if not filepaths:
+            return
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            # SQLite has 999 parameter limit, batch in chunks of 500
+            for i in range(0, len(filepaths), 500):
+                chunk = filepaths[i:i+500]
+                placeholders = ','.join('?' * len(chunk))
+
+                # First delete associated palettes
+                cursor.execute(
+                    f'DELETE FROM palettes WHERE image_id IN '
+                    f'(SELECT id FROM images WHERE filepath IN ({placeholders}))',
+                    chunk
+                )
+
+                # Then delete the images
+                cursor.execute(
+                    f'DELETE FROM images WHERE filepath IN ({placeholders})',
+                    chunk
+                )
             self.conn.commit()
