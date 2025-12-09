@@ -1,0 +1,50 @@
+# Example Alacritty color template for Variety ThemeEngine
+# Place at: ~/.config/wallust/templates/alacritty.toml
+#
+# This file uses wallust template syntax:
+#   {{variable}}              - Insert color value (#rrggbb)
+#   {{variable | filter}}     - Apply filter to color
+#
+# Available variables:
+#   background, foreground, cursor
+#   color0-color15 (standard 16-color palette)
+#
+# Available filters:
+#   strip                     - Remove # prefix (ff0000 instead of #ff0000)
+#   darken(amount)           - Darken by amount (0.0-1.0)
+#   lighten(amount)          - Lighten by amount (0.0-1.0)
+#   saturate(amount)         - Increase saturation (0.0-1.0)
+#   desaturate(amount)       - Decrease saturation (0.0-1.0)
+#   blend(#hexcolor)         - Blend with another color
+
+[colors.primary]
+background = "{{background}}"
+foreground = "{{foreground}}"
+
+[colors.cursor]
+cursor = "{{cursor}}"
+text = "{{background}}"
+
+[colors.selection]
+background = "{{color4 | lighten(0.2)}}"
+text = "{{foreground}}"
+
+[colors.normal]
+black   = "{{color0}}"
+red     = "{{color1}}"
+green   = "{{color2}}"
+yellow  = "{{color3}}"
+blue    = "{{color4}}"
+magenta = "{{color5}}"
+cyan    = "{{color6}}"
+white   = "{{color7}}"
+
+[colors.bright]
+black   = "{{color8}}"
+red     = "{{color9}}"
+green   = "{{color10}}"
+yellow  = "{{color11}}"
+blue    = "{{color12}}"
+magenta = "{{color13}}"
+cyan    = "{{color14}}"
+white   = "{{color15}}"

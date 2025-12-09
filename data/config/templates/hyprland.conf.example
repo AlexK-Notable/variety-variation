@@ -1,0 +1,35 @@
+# Example Hyprland color template for Variety ThemeEngine
+# Place at: ~/.config/wallust/templates/hyprland.conf
+#
+# Source this in your main hyprland.conf:
+#   source = ~/.config/hypr/colors.conf
+
+# Window border colors (without # prefix using strip filter)
+$color_active = rgb({{color4 | strip}})
+$color_inactive = rgb({{color0 | lighten(0.1) | strip}})
+
+# General colors
+$background = rgb({{background | strip}})
+$foreground = rgb({{foreground | strip}})
+
+# Accent colors
+$accent = rgb({{color4 | strip}})
+$accent_dim = rgb({{color4 | desaturate(0.3) | strip}})
+$urgent = rgb({{color1 | strip}})
+$warning = rgb({{color3 | strip}})
+$success = rgb({{color2 | strip}})
+
+# Apply to decorations
+general {
+    col.active_border = $color_active
+    col.inactive_border = $color_inactive
+}
+
+decoration {
+    col.shadow = rgba({{background | strip}}ee)
+}
+
+group {
+    col.border_active = $color_active
+    col.border_inactive = $color_inactive
+}

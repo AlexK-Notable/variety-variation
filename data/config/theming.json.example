@@ -1,0 +1,24 @@
+{
+  "_comment": "Variety ThemeEngine configuration - Place at ~/.config/variety/theming.json",
+  "_comment2": "This file is OPTIONAL - all templates are enabled by default",
+
+  "enabled": true,
+
+  "templates": {
+    "_comment": "Override enable/disable per template (true/false)",
+    "_comment2": "Template names must match those in wallust.toml",
+    "alacritty": true,
+    "waybar": true,
+    "rofi": true,
+    "dunst": false
+  },
+
+  "reload_commands": {
+    "_comment": "Override reload commands per template",
+    "_comment2": "Default commands are built-in for common apps",
+    "_comment3": "Set to null to disable reload, or custom command string",
+    "waybar": "pkill -SIGUSR2 waybar",
+    "polybar": "polybar-msg cmd restart",
+    "custom_app": "systemctl --user restart custom-app.service"
+  }
+}

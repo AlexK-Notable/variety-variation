@@ -1,0 +1,51 @@
+# Example wallust.toml for Variety ThemeEngine integration
+#
+# This file configures wallust template processing. Place your actual
+# config at: ~/.config/wallust/wallust.toml
+#
+# Templates are processed when wallpapers change, generating color-themed
+# config files for your applications.
+#
+# Template syntax uses {{variable}} and {{variable | filter(arg)}} format.
+# Available variables: color0-color15, background, foreground, cursor
+# Available filters: darken(0.1), lighten(0.1), saturate(0.1), desaturate(0.1),
+#                    blend(#hex), strip (removes # prefix)
+
+# Backend for color extraction (default: wal)
+backend = "wal"
+
+# Color saturation (0-100, default: 50)
+saturation = 50
+
+# [templates] section defines which templates to process
+# Format: name = { template = "source_file", target = "output_path" }
+#
+# - template: filename in ~/.config/wallust/templates/
+# - target: where to write the processed output (~ expansion supported)
+
+[templates]
+# Terminal emulators
+alacritty = { template = "alacritty.toml", target = "~/.config/alacritty/colors.toml" }
+kitty = { template = "kitty.conf", target = "~/.config/kitty/colors.conf" }
+foot = { template = "foot.ini", target = "~/.config/foot/colors.ini" }
+
+# Window managers / Compositors
+hyprland = { template = "hyprland.conf", target = "~/.config/hypr/colors.conf" }
+sway = { template = "sway.conf", target = "~/.config/sway/colors" }
+i3 = { template = "i3.conf", target = "~/.config/i3/colors" }
+
+# Bars
+waybar = { template = "waybar.css", target = "~/.config/waybar/colors.css" }
+polybar = { template = "polybar.ini", target = "~/.config/polybar/colors.ini" }
+
+# Launchers
+rofi = { template = "rofi.rasi", target = "~/.config/rofi/colors.rasi" }
+wofi = { template = "wofi.css", target = "~/.config/wofi/colors.css" }
+
+# Notification daemons
+dunst = { template = "dunst.conf", target = "~/.config/dunst/colors.conf" }
+mako = { template = "mako.conf", target = "~/.config/mako/colors" }
+
+# Other
+gtk = { template = "gtk.css", target = "~/.config/gtk-3.0/colors.css" }
+zathura = { template = "zathura.conf", target = "~/.config/zathura/colors" }
