@@ -19,6 +19,7 @@ from variety.smart_selection.weights import (
     source_factor,
     favorite_boost,
     new_image_boost,
+    color_affinity_factor,
     calculate_weight,
 )
 from variety.smart_selection.palette import (
@@ -52,6 +53,7 @@ __all__ = [
     'source_factor',
     'favorite_boost',
     'new_image_boost',
+    'color_affinity_factor',
     'calculate_weight',
     # Palette functions
     'hex_to_hsl',

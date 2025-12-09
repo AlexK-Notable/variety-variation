@@ -425,5 +425,225 @@ class TestMinimumWeightFloor(unittest.TestCase):
         self.assertGreater(weight, 0)
 
 
+class TestColorAffinityFactor(unittest.TestCase):
+    """Tests for color_affinity_factor calculation."""
+
+    def test_import_color_affinity_factor(self):
+        """color_affinity_factor can be imported from weights module."""
+        from variety.smart_selection.weights import color_affinity_factor
+        self.assertIsNotNone(color_affinity_factor)
+
+    def test_returns_neutral_without_target_palette(self):
+        """Returns 1.0 when target_palette is None."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+
+        affinity = color_affinity_factor(palette, target_palette=None, config=config)
+        self.assertEqual(affinity, 1.0)
+
+    def test_returns_neutral_when_color_matching_disabled(self):
+        """Returns 1.0 when color_match_weight is 0."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=0.0)
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+        target = {'avg_hue': 0, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        affinity = color_affinity_factor(palette, target_palette=target, config=config)
+        self.assertEqual(affinity, 1.0)
+
+    def test_returns_penalty_for_missing_palette(self):
+        """Returns 0.8 when image has no palette data."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        target = {'avg_hue': 180, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        affinity = color_affinity_factor(image_palette=None, target_palette=target,
+                                         config=config)
+        self.assertEqual(affinity, 0.8)
+
+    def test_returns_boost_for_identical_palettes(self):
+        """Returns boost > 1.0 for identical palettes."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+        target = {'avg_hue': 180, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        affinity = color_affinity_factor(palette, target_palette=target, config=config)
+        self.assertGreater(affinity, 1.5)  # Should get strong boost
+
+    def test_returns_penalty_for_dissimilar_palettes(self):
+        """Returns penalty < 1.0 for very different palettes."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        # Bright, warm palette
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=30,
+                                avg_saturation=0.8, avg_lightness=0.9,
+                                color_temperature=0.8)
+        # Dark, cool target
+        target = {'avg_hue': 210, 'avg_saturation': 0.2,
+                  'avg_lightness': 0.1, 'color_temperature': -0.8}
+
+        affinity = color_affinity_factor(palette, target_palette=target, config=config)
+        self.assertLess(affinity, 0.5)  # Should get penalty
+
+    def test_affinity_clamped_to_min_max_range(self):
+        """Affinity is always between 0.1 and 2.0."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=5.0)  # Extreme weight
+
+        # Perfect match
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+        target = {'avg_hue': 180, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        affinity = color_affinity_factor(palette, target_palette=target, config=config)
+        self.assertLessEqual(affinity, 2.0)
+        self.assertGreaterEqual(affinity, 0.1)
+
+    def test_neutral_at_fifty_percent_similarity(self):
+        """Returns approximately 1.0 at 50% similarity."""
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        # Palettes with ~50% similarity
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=90,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+        target = {'avg_hue': 270, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        affinity = color_affinity_factor(palette, target_palette=target, config=config)
+        # Should be close to 1.0 (neutral) - allowing some margin
+        self.assertGreater(affinity, 0.7)
+        self.assertLessEqual(affinity, 1.35)
+
+
+class TestColorAffinityInCalculateWeight(unittest.TestCase):
+    """Tests for color affinity integration in calculate_weight."""
+
+    def test_calculate_weight_with_similar_palette_gets_boost(self):
+        """calculate_weight returns higher weight for similar color palette."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        image = ImageRecord(filepath='/test/img.jpg', filename='img.jpg',
+                            times_shown=0)
+
+        # Similar palette
+        similar_palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                        avg_saturation=0.5, avg_lightness=0.5,
+                                        color_temperature=0.0)
+        target = {'avg_hue': 180, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        # Dissimilar palette
+        dissimilar_palette = PaletteRecord(filepath='/test/img2.jpg', avg_hue=0,
+                                           avg_saturation=0.1, avg_lightness=0.9,
+                                           color_temperature=0.8)
+
+        w_similar = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=similar_palette, target_palette=target
+        )
+        w_dissimilar = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=dissimilar_palette, target_palette=target
+        )
+
+        self.assertGreater(w_similar, w_dissimilar)
+
+    def test_calculate_weight_no_palette_penalty(self):
+        """calculate_weight applies slight penalty when image has no palette."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        image = ImageRecord(filepath='/test/img.jpg', filename='img.jpg',
+                            times_shown=0)
+        target = {'avg_hue': 180, 'avg_saturation': 0.5,
+                  'avg_lightness': 0.5, 'color_temperature': 0.0}
+
+        # With palette (similar)
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+        w_with_palette = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette, target_palette=target
+        )
+
+        # Without palette
+        w_no_palette = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=None, target_palette=target
+        )
+
+        # Weight with similar palette should be higher
+        self.assertGreater(w_with_palette, w_no_palette)
+
+    def test_calculate_weight_color_affinity_neutral_without_target(self):
+        """calculate_weight is unaffected when no target palette specified."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        image = ImageRecord(filepath='/test/img.jpg', filename='img.jpg',
+                            times_shown=0)
+        palette = PaletteRecord(filepath='/test/img.jpg', avg_hue=180,
+                                avg_saturation=0.5, avg_lightness=0.5,
+                                color_temperature=0.0)
+
+        w_with_target = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette, target_palette={'avg_hue': 180,
+                                                   'avg_saturation': 0.5,
+                                                   'avg_lightness': 0.5,
+                                                   'color_temperature': 0.0}
+        )
+        w_no_target = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette, target_palette=None
+        )
+
+        # Without target, color affinity is neutral (1.0)
+        # With identical target, should get boost
+        self.assertGreater(w_with_target, w_no_target)
+
+
 if __name__ == '__main__':
     unittest.main()

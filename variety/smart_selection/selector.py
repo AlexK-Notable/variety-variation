@@ -97,6 +97,9 @@ class SmartSelector:
             selected = random.sample(candidates, min(count, len(candidates)))
             return [img.filepath for img in selected]
 
+        # Extract target palette from constraints for color affinity
+        target_palette = constraints.target_palette if constraints else None
+
         # Calculate weights for each candidate
         weights = []
         for img in candidates:
@@ -106,7 +109,17 @@ class SmartSelector:
                 if source:
                     source_last_shown = source.last_shown_at
 
-            weight = calculate_weight(img, source_last_shown, self.config)
+            # Get image palette for color affinity calculation
+            image_palette = None
+            if target_palette and self.config.color_match_weight:
+                image_palette = self.db.get_palette(img.filepath)
+
+            weight = calculate_weight(
+                img, source_last_shown, self.config,
+                image_palette=image_palette,
+                target_palette=target_palette,
+                constraints=constraints,
+            )
             weights.append(weight)
 
         # Weighted random selection without replacement
@@ -500,6 +513,9 @@ class SmartSelector:
         if not candidates:
             return []
 
+        # Extract target palette from constraints for color affinity
+        target_palette = constraints.target_palette if constraints else None
+
         # Calculate weights for each candidate
         weighted_candidates = []
         for img in candidates:
@@ -509,7 +525,17 @@ class SmartSelector:
                 if source:
                     source_last_shown = source.last_shown_at
 
-            weight = calculate_weight(img, source_last_shown, self.config)
+            # Get image palette for color affinity calculation
+            image_palette = None
+            if target_palette and self.config.color_match_weight:
+                image_palette = self.db.get_palette(img.filepath)
+
+            weight = calculate_weight(
+                img, source_last_shown, self.config,
+                image_palette=image_palette,
+                target_palette=target_palette,
+                constraints=constraints,
+            )
             weighted_candidates.append({
                 'filepath': img.filepath,
                 'filename': img.filename,
