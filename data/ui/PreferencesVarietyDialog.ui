@@ -4104,6 +4104,49 @@ Night (22-6): Dark/muted</property>
                     <property name="position">17</property>
                   </packing>
                 </child>
+                <!-- Extraction Progress Section -->
+                <child>
+                  <object class="GtkBox" id="smart_extraction_progress_box">
+                    <property name="visible">False</property>
+                    <property name="can_focus">False</property>
+                    <property name="margin_left">15</property>
+                    <property name="margin_right">15</property>
+                    <property name="margin_top">5</property>
+                    <property name="spacing">10</property>
+                    <child>
+                      <object class="GtkProgressBar" id="smart_extraction_progress">
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="show_text">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">True</property>
+                        <property name="fill">True</property>
+                        <property name="position">0</property>
+                      </packing>
+                    </child>
+                    <child>
+                      <object class="GtkButton" id="smart_extraction_cancel">
+                        <property name="label" translatable="yes">Cancel</property>
+                        <property name="visible">True</property>
+                        <property name="can_focus">True</property>
+                        <property name="receives_default">True</property>
+                        <property name="tooltip_text" translatable="yes">Cancel the current palette extraction</property>
+                        <signal name="clicked" handler="on_smart_extraction_cancel_clicked" swapped="no"/>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">1</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">18</property>
+                  </packing>
+                </child>
                 <!-- Preview Section - Simple button to open popout window -->
                 <child>
                   <object class="GtkSeparator">
@@ -4114,7 +4157,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">18</property>
+                    <property name="position">19</property>
                   </packing>
                 </child>
                 <child>
@@ -4188,7 +4231,7 @@ Night (22-6): Dark/muted</property>
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">19</property>
+                    <property name="position">20</property>
                   </packing>
                 </child>
               </object>

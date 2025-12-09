@@ -73,6 +73,10 @@ class PreferencesVarietyDialog(PreferencesDialog):
         PreferencesVarietyDialog.add_image_preview(self.ui.icon_chooser, 64)
         self.loading = False
 
+        # Extraction state tracking
+        self._extraction_cancelled = False
+        self._extraction_thread = None
+
         self.fav_chooser = FolderChooser(
             self.ui.favorites_folder_chooser, self.on_favorites_changed
         )
@@ -1888,9 +1892,18 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if not hasattr(self.parent, 'smart_selector') or not self.parent.smart_selector:
             return
 
+        # Check wallust availability first
+        if not shutil.which('wallust'):
+            self._show_wallust_required_dialog()
+            return
+
         # Get count of images without palettes for the dialog
         stats = self.parent.smart_selector.get_statistics()
         images_without = stats['images_indexed'] - stats['images_with_palettes']
+
+        if images_without == 0:
+            self.parent.show_notification(_("All images already have palettes"))
+            return
 
         # Show confirmation dialog
         dialog = Gtk.MessageDialog(
@@ -1898,12 +1911,9 @@ class PreferencesVarietyDialog(PreferencesDialog):
             Gtk.DialogFlags.MODAL,
             Gtk.MessageType.INFO,
             Gtk.ButtonsType.YES_NO,
-            _("Extract color palettes for indexed images?\n\n"
-              "This will:\n"
-              "• Use wallust to analyze {count} images without palettes\n"
-              "• Enable color-aware selection features\n"
-              "• May take several minutes for large collections\n\n"
-              "You can continue using the application while extraction runs.").format(count=images_without)
+            _("Extract color palettes for {count} images?\n\n"
+              "This may take several minutes for large collections.\n"
+              "You can cancel at any time.").format(count=images_without)
         )
         dialog.set_title(_("Extract Palettes"))
         response = dialog.run()
@@ -1912,18 +1922,30 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if response != Gtk.ResponseType.YES:
             return
 
-        # Prevent multiple clicks - disable button during extraction
-        if widget:
-            widget.set_sensitive(False)
-            original_label = widget.get_label()
-            widget.set_label(_("Extracting..."))
+        # Reset cancellation flag
+        self._extraction_cancelled = False
+
+        # Show progress UI
+        self.ui.smart_extract_palettes.set_sensitive(False)
+        self.ui.smart_extraction_progress_box.set_visible(True)
+        self.ui.smart_extraction_progress.set_fraction(0.0)
+        self.ui.smart_extraction_progress.set_text(_("Starting..."))
+        self.ui.smart_extraction_cancel.set_sensitive(True)
 
         def progress_callback(current, total):
-            """Update button label with progress."""
+            """Update progress bar with extraction progress."""
+            if self._extraction_cancelled:
+                raise InterruptedError("Extraction cancelled by user")
+
             def _update():
-                if widget and total > 0:
-                    pct = int((current / total) * 100)
-                    widget.set_label(_("Extracting... {}%").format(pct))
+                if total > 0:
+                    fraction = current / total
+                    self.ui.smart_extraction_progress.set_fraction(fraction)
+                    self.ui.smart_extraction_progress.set_text(
+                        _("{current} / {total} ({pct}%)").format(
+                            current=current, total=total, pct=int(fraction * 100)
+                        )
+                    )
             Util.add_mainloop_task(_update)
 
         def extract():
@@ -1931,22 +1953,62 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 count = self.parent.smart_selector.extract_all_palettes(
                     progress_callback=progress_callback
                 )
-                Util.add_mainloop_task(self.update_smart_selection_stats)
-                self.parent.show_notification(
-                    _("Extracted {} palettes").format(count)
-                )
+
+                def _on_success():
+                    self.update_smart_selection_stats()
+                    self.parent.show_notification(_("Extracted {} palettes").format(count))
+                Util.add_mainloop_task(_on_success)
+
+            except InterruptedError:
+                def _on_cancelled():
+                    self.parent.show_notification(_("Palette extraction cancelled"))
+                Util.add_mainloop_task(_on_cancelled)
+
             except Exception:
                 logger.exception(lambda: "Error extracting palettes")
-                self.parent.show_notification(_("Palette extraction failed"))
+                def _on_error():
+                    self.parent.show_notification(_("Palette extraction failed"))
+                Util.add_mainloop_task(_on_error)
+
             finally:
-                # Re-enable button
                 def _restore():
-                    if widget:
-                        widget.set_sensitive(True)
-                        widget.set_label(original_label)
+                    self.ui.smart_extraction_progress_box.set_visible(False)
+                    self.ui.smart_extract_palettes.set_sensitive(True)
                 Util.add_mainloop_task(_restore)
 
-        threading.Thread(target=extract, daemon=True).start()
+        self._extraction_thread = threading.Thread(target=extract, daemon=True)
+        self._extraction_thread.start()
+
+    def on_smart_extraction_cancel_clicked(self, widget=None):
+        """Cancel ongoing palette extraction."""
+        self._extraction_cancelled = True
+        self.ui.smart_extraction_progress.set_text(_("Cancelling..."))
+        self.ui.smart_extraction_cancel.set_sensitive(False)
+
+    def _show_wallust_required_dialog(self):
+        """Show dialog explaining wallust is required."""
+        dialog = Gtk.MessageDialog(
+            self,
+            Gtk.DialogFlags.MODAL,
+            Gtk.MessageType.WARNING,
+            Gtk.ButtonsType.OK,
+            None
+        )
+        dialog.set_title(_("wallust Required"))
+
+        dialog.format_secondary_markup(
+            _("<b>wallust</b> is required for color-aware selection.\n\n"
+              "<b>Installation Options:</b>\n"
+              "  Cargo: <tt>cargo install wallust</tt>\n"
+              "  Arch: <tt>pacman -S wallust</tt>\n"
+              "  Nix: <tt>nix-env -iA nixpkgs.wallust</tt>\n\n"
+              "<b>After installation:</b>\n"
+              "  1. Run <tt>wallust run &lt;any_image&gt;</tt> to initialize\n"
+              "  2. Re-enable color features in Variety")
+        )
+
+        dialog.run()
+        dialog.destroy()
 
     def on_smart_clear_history_clicked(self, widget=None):
         """Clear the Smart Selection history."""
