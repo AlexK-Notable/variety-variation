@@ -603,6 +603,52 @@ class TestDatabaseThreadSafety(unittest.TestCase):
         self.assertEqual(image.times_shown, expected,
                         f"Expected times_shown={expected}, got {image.times_shown}")
 
+    def test_close_is_thread_safe(self):
+        """Verify close() holds lock to prevent use-after-close."""
+        import threading
+        from variety.smart_selection.database import ImageDatabase
+
+        db = ImageDatabase(self.db_path)
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(100):
+                    # This should either succeed or raise cleanly
+                    try:
+                        db.get_all_images()
+                    except Exception as e:
+                        if "closed database" in str(e).lower():
+                            errors.append(e)
+            except Exception as e:
+                errors.append(e)
+
+        # Start worker threads
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+
+        # Close database while threads are running
+        time.sleep(0.01)
+        db.close()
+
+        for t in threads:
+            t.join()
+
+        # Should not have any "closed database" errors - threads should
+        # either complete before close or be blocked by the lock
+        closed_errors = [e for e in errors if "closed" in str(e).lower()]
+        self.assertEqual(len(closed_errors), 0, f"Got use-after-close errors: {closed_errors}")
+
+    def test_close_idempotent(self):
+        """Verify close() can be called multiple times safely."""
+        from variety.smart_selection.database import ImageDatabase
+
+        db = ImageDatabase(self.db_path)
+        db.close()
+        db.close()  # Should not raise
+        db.close()  # Should not raise
+
 
 class TestDatabaseResilience(unittest.TestCase):
     """Tests for database crash resilience and durability."""

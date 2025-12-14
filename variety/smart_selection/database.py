@@ -207,10 +207,15 @@ class ImageDatabase:
         self.conn.commit()
 
     def close(self):
-        """Close the database connection."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        """Close the database connection.
+
+        Thread-safe: holds lock to prevent use-after-close race.
+        Idempotent: safe to call multiple times.
+        """
+        with self._lock:
+            if self.conn:
+                self.conn.close()
+                self.conn = None
 
     def __enter__(self):
         """Context manager entry."""
