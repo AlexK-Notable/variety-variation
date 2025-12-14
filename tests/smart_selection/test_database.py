@@ -991,5 +991,85 @@ class TestStatisticsQueries(unittest.TestCase):
             self.assertEqual(result, results[0])
 
 
+class TestBatchDeleteImages(unittest.TestCase):
+    """Tests for batch_delete_images functionality."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_batch_delete_removes_palettes(self):
+        """Verify batch delete also removes associated palette records."""
+        from variety.smart_selection.database import ImageDatabase, ImageRecord, PaletteRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Create test image and palette
+        image = ImageRecord(
+            filepath="/test/image1.jpg",
+            filename="image1.jpg",
+            source_id="test",
+        )
+        db.upsert_image(image)
+
+        palette = PaletteRecord(
+            filepath="/test/image1.jpg",
+            color0="#ffffff",
+            avg_lightness=0.5,
+        )
+        db.upsert_palette(palette)
+
+        # Verify palette exists
+        self.assertIsNotNone(db.get_palette("/test/image1.jpg"))
+
+        # Delete the image
+        db.batch_delete_images(["/test/image1.jpg"])
+
+        # Palette should also be deleted
+        self.assertIsNone(db.get_palette("/test/image1.jpg"))
+        self.assertIsNone(db.get_image("/test/image1.jpg"))
+
+        db.close()
+
+    def test_batch_delete_multiple_with_palettes(self):
+        """Verify batch delete handles multiple images with palettes."""
+        from variety.smart_selection.database import ImageDatabase, ImageRecord, PaletteRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Create 3 images, 2 with palettes
+        for i in range(3):
+            image = ImageRecord(
+                filepath=f"/test/image{i}.jpg",
+                filename=f"image{i}.jpg",
+                source_id="test",
+            )
+            db.upsert_image(image)
+
+            if i < 2:  # Only first 2 have palettes
+                palette = PaletteRecord(
+                    filepath=f"/test/image{i}.jpg",
+                    color0="#ffffff",
+                )
+                db.upsert_palette(palette)
+
+        # Delete all 3
+        db.batch_delete_images([f"/test/image{i}.jpg" for i in range(3)])
+
+        # All should be gone
+        for i in range(3):
+            self.assertIsNone(db.get_image(f"/test/image{i}.jpg"))
+            self.assertIsNone(db.get_palette(f"/test/image{i}.jpg"))
+
+        db.close()
+
+
 if __name__ == '__main__':
     unittest.main()

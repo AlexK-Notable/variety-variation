@@ -1137,10 +1137,9 @@ class ImageDatabase:
                 chunk = filepaths[i:i+500]
                 placeholders = ','.join('?' * len(chunk))
 
-                # First delete associated palettes
+                # First delete associated palettes (palettes use filepath, not image_id)
                 cursor.execute(
-                    f'DELETE FROM palettes WHERE image_id IN '
-                    f'(SELECT id FROM images WHERE filepath IN ({placeholders}))',
+                    f'DELETE FROM palettes WHERE filepath IN ({placeholders})',
                     chunk
                 )
 
