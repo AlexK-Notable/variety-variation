@@ -190,7 +190,22 @@ class SmartSelector:
         else:
             candidates = self.db.get_all_images()
 
-        # Always filter out non-existent files (phantom index protection)
+        # File Existence Filtering (Phantom Index Protection)
+        #
+        # Filter out images whose files no longer exist on disk. This handles
+        # the case where files are deleted after being indexed in the database.
+        #
+        # Without this check, the selector could return paths to non-existent files,
+        # which would cause the wallpaper setter to fail with FileNotFoundError.
+        #
+        # Race Condition Note:
+        # There's a small time-of-check-to-time-of-use (TOCTOU) race window between
+        # this existence check and when the caller actually opens the file. A file
+        # could be deleted between this check and use. Callers should handle
+        # FileNotFoundError gracefully as a final safety net.
+        #
+        # Performance: This adds minimal overhead (one stat syscall per candidate)
+        # and prevents selection failures that would require retry logic.
         candidates = [img for img in candidates if os.path.exists(img.filepath)]
 
         if not constraints:
