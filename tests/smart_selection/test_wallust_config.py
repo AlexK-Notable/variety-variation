@@ -174,6 +174,46 @@ class TestWallustConfigManager:
         assert manager._config_mtime is None
 
 
+class TestConfigManagerSingleton:
+    """Tests for WallustConfigManager singleton thread safety."""
+
+    def test_get_config_manager_returns_same_instance(self):
+        """Verify get_config_manager returns the same instance."""
+        from variety.smart_selection.wallust_config import get_config_manager, reset_config_manager
+        import threading
+
+        # Reset global state for test isolation
+        try:
+            reset_config_manager()
+        except NameError:
+            # reset_config_manager doesn't exist yet - that's okay
+            import variety.smart_selection.wallust_config as wc
+            wc._global_config_manager = None
+
+        instances = []
+        errors = []
+
+        def getter():
+            try:
+                for _ in range(50):
+                    inst = get_config_manager()
+                    instances.append(id(inst))
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=getter) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"Got errors: {errors}"
+
+        # All instances should have the same id
+        unique_ids = set(instances)
+        assert len(unique_ids) == 1, f"Got {len(unique_ids)} different instances, expected 1"
+
+
 class TestFindLatestPaletteCache:
     """Tests for find_latest_palette_cache function."""
 

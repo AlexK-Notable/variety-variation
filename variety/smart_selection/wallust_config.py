@@ -8,6 +8,7 @@ palette.py and VarietyWindow.py with a cached, efficient implementation.
 import os
 import re
 import logging
+import threading
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -196,15 +197,32 @@ def find_latest_palette_cache(palette_type: str) -> Optional[str]:
 
 # Global shared instance for efficiency
 _global_config_manager: Optional[WallustConfigManager] = None
+_global_config_lock = threading.Lock()
 
 
 def get_config_manager() -> WallustConfigManager:
     """Get the global WallustConfigManager instance.
 
+    Thread-safe: Uses double-checked locking pattern.
+
     Returns:
         Shared WallustConfigManager instance
     """
     global _global_config_manager
-    if _global_config_manager is None:
-        _global_config_manager = WallustConfigManager()
-    return _global_config_manager
+
+    # Fast path: instance already exists
+    if _global_config_manager is not None:
+        return _global_config_manager
+
+    # Slow path: acquire lock and check again
+    with _global_config_lock:
+        if _global_config_manager is None:
+            _global_config_manager = WallustConfigManager()
+        return _global_config_manager
+
+
+def reset_config_manager() -> None:
+    """Reset the global config manager. For testing only."""
+    global _global_config_manager
+    with _global_config_lock:
+        _global_config_manager = None
