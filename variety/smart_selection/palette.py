@@ -363,6 +363,32 @@ class PaletteExtractor:
             # Find cache entries modified AFTER we started wallust
             # This ensures we get the correct entry even with concurrent processes
             # Subtract 1 second tolerance for filesystem timing differences
+            #
+            # LIMITATION: Timestamp-based cache matching
+            # -------------------------------------------
+            # This cache file discovery uses filesystem modification times (mtime)
+            # to identify the wallust output for the current image. This approach
+            # is best-effort and has the following characteristics:
+            #
+            # 1. SAFE for single-process Variety usage (the normal case):
+            #    - Variety's debouncing ensures only one wallust process runs at a time
+            #    - The 1-second tolerance handles filesystem timestamp precision
+            #
+            # 2. THEORETICAL RACE CONDITION with multiple Variety instances:
+            #    - If two Variety processes run wallust simultaneously, timestamp
+            #      matching could theoretically select the wrong cache file
+            #    - This is an edge case: multiple Variety instances are rare
+            #    - Even if it occurs, the worst case is selecting a different palette
+            #      (not a crash or data corruption)
+            #
+            # 3. MORE ROBUST SOLUTION would require wallust changes:
+            #    - Wallust could include the source image hash in cache filenames
+            #    - This would allow deterministic matching without timestamp dependency
+            #    - Example: ~/.cache/wallust/{image_hash}_{palette_type}.json
+            #
+            # The current implementation prioritizes simplicity and works reliably
+            # for the vast majority of use cases. The timestamp approach is adequate
+            # given Variety's single-threaded architecture and wallust debouncing.
             search_threshold = start_time - 1.0
             latest_time = 0
             latest_file = None
