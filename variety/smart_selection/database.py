@@ -958,8 +958,8 @@ class ImageDatabase:
     def backup(self, backup_path: str) -> bool:
         """Create a backup copy of the database.
 
-        Uses SQLite's backup API for a consistent copy even while
-        the database is in use.
+        First attempts SQLite's backup API, then falls back to file copy
+        after checkpointing WAL to ensure consistency.
 
         Args:
             backup_path: Path where backup should be created.
@@ -967,24 +967,26 @@ class ImageDatabase:
         Returns:
             True if backup succeeded, False otherwise.
         """
-        import shutil
-
         with self._lock:
             try:
-                # Checkpoint WAL to ensure all data is in main file
-                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
-                # Use SQLite backup API for consistent copy
+                # Preferred: SQLite backup API handles WAL automatically
                 backup_conn = sqlite3.connect(backup_path)
                 self.conn.backup(backup_conn)
                 backup_conn.close()
                 return True
-            except Exception:
-                # Fallback to file copy if backup API fails
+            except Exception as e:
+                logger.warning(f"SQLite backup API failed: {e}, trying file copy")
                 try:
+                    # Checkpoint WAL before file copy to ensure consistency
+                    cursor = self.conn.cursor()
+                    cursor.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                    cursor.close()
+
+                    # Now safe to copy the main database file
                     shutil.copy2(self.db_path, backup_path)
                     return True
-                except Exception:
+                except Exception as e2:
+                    logger.error(f"Backup failed: {e2}")
                     return False
 
     def vacuum(self) -> bool:

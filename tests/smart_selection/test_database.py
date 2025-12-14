@@ -1155,5 +1155,48 @@ class TestBatchPaletteLoading(unittest.TestCase):
         db.close()
 
 
+class TestDatabaseBackup(unittest.TestCase):
+    """Tests for database backup functionality."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_backup_checkpoints_wal(self):
+        """Verify backup creates a complete, consistent copy."""
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import ImageRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Add some data
+        for i in range(10):
+            image = ImageRecord(
+                filepath=f"/test/image{i}.jpg",
+                filename=f"image{i}.jpg",
+            )
+            db.upsert_image(image)
+
+        # Create backup
+        backup_path = self.db_path + ".backup"
+        result = db.backup(backup_path)
+        self.assertTrue(result)
+
+        # Verify backup is readable and complete
+        backup_db = ImageDatabase(backup_path)
+        images = backup_db.get_all_images()
+        self.assertEqual(len(images), 10)
+
+        backup_db.close()
+        db.close()
+
+
 if __name__ == '__main__':
     unittest.main()
