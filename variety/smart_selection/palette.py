@@ -423,8 +423,15 @@ class PaletteExtractor:
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse wallust JSON: {e}")
             return None
-        except Exception as e:
-            logger.warning(f"Failed to extract palette from {image_path}: {e}")
+        except subprocess.SubprocessError as e:
+            logger.warning(f"wallust subprocess error for {image_path}: {e}")
+            return None
+        except OSError as e:
+            logger.warning(f"OS error extracting palette from {image_path}: {e}")
+            return None
+        except ValueError as e:
+            # Palette parsing errors (e.g., invalid color format)
+            logger.warning(f"Failed to parse palette data from {image_path}: {e}")
             return None
 
 
