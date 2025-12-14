@@ -11,6 +11,7 @@ Provides cached statistical analysis of the wallpaper collection including:
 """
 
 import logging
+import threading
 from typing import Dict, List, Any, Optional
 
 from variety.smart_selection.database import ImageDatabase
@@ -25,9 +26,8 @@ class CollectionStatistics:
     to avoid redundant calculations. Cache is invalidated when the
     collection changes (images shown, palettes indexed, etc.).
 
-    Thread-safety: All database operations are thread-safe via the
-    ImageDatabase's internal locking. The cache flag is a simple
-    boolean that doesn't require additional locking.
+    Thread-safety: Uses a lock to protect cache access. Database
+    operations are also thread-safe via ImageDatabase's internal locking.
     """
 
     def __init__(self, db: ImageDatabase):
@@ -37,6 +37,7 @@ class CollectionStatistics:
             db: ImageDatabase instance to query.
         """
         self.db = db
+        self._lock = threading.Lock()
         self._cache: Dict[str, Any] = {}
         self._cache_valid = False
 
@@ -45,9 +46,12 @@ class CollectionStatistics:
 
         Should be called whenever images are shown, indexed,
         or palette data is updated to ensure fresh statistics.
+
+        Thread-safe: acquires lock before modifying cache.
         """
-        self._cache_valid = False
-        self._cache = {}
+        with self._lock:
+            self._cache_valid = False
+            self._cache = {}
         logger.debug("Statistics cache invalidated")
 
     def _ensure_cache_populated(self):
@@ -55,16 +59,19 @@ class CollectionStatistics:
 
         This "all-or-nothing" cache design ensures consistency:
         either all distributions are cached together, or none are.
-        """
-        if self._cache_valid:
-            return
 
-        # Fetch all distributions in a single pass
-        self._cache['lightness'] = self.db.get_lightness_counts()
-        self._cache['hue'] = self.db.get_hue_counts()
-        self._cache['saturation'] = self.db.get_saturation_counts()
-        self._cache['freshness'] = self.db.get_freshness_counts()
-        self._cache_valid = True
+        Thread-safe: acquires lock before checking/modifying cache.
+        """
+        with self._lock:
+            if self._cache_valid:
+                return
+
+            # Fetch all distributions in a single pass
+            self._cache['lightness'] = self.db.get_lightness_counts()
+            self._cache['hue'] = self.db.get_hue_counts()
+            self._cache['saturation'] = self.db.get_saturation_counts()
+            self._cache['freshness'] = self.db.get_freshness_counts()
+            self._cache_valid = True
         logger.debug("Statistics cache populated")
 
     def get_lightness_distribution(self) -> Dict[str, int]:
@@ -76,12 +83,15 @@ class CollectionStatistics:
         - medium_light: 0.50 - 0.75
         - light: 0.75 - 1.00
 
+        Thread-safe: cache access protected by lock.
+
         Returns:
             Dict[str, int] with bucket names as keys and counts as values.
             Example: {'dark': 15, 'medium_dark': 42, 'medium_light': 30, 'light': 13}
         """
         self._ensure_cache_populated()
-        return self._cache['lightness']
+        with self._lock:
+            return self._cache['lightness'].copy()
 
     def get_hue_distribution(self) -> Dict[str, int]:
         """Get image count by hue family.
@@ -97,12 +107,15 @@ class CollectionStatistics:
         - pink: 285-345°
         - neutral: Images with avg_saturation < 0.1 (grayscale)
 
+        Thread-safe: cache access protected by lock.
+
         Returns:
             Dict[str, int] with hue family names as keys and counts as values.
             Example: {'red': 5, 'orange': 3, ..., 'neutral': 12}
         """
         self._ensure_cache_populated()
-        return self._cache['hue']
+        with self._lock:
+            return self._cache['hue'].copy()
 
     def get_saturation_distribution(self) -> Dict[str, int]:
         """Get image count by saturation level.
@@ -113,12 +126,15 @@ class CollectionStatistics:
         - saturated: 0.50 - 0.75
         - vibrant: 0.75 - 1.00
 
+        Thread-safe: cache access protected by lock.
+
         Returns:
             Dict[str, int] with bucket names as keys and counts as values.
             Example: {'muted': 20, 'moderate': 35, 'saturated': 30, 'vibrant': 15}
         """
         self._ensure_cache_populated()
-        return self._cache['saturation']
+        with self._lock:
+            return self._cache['saturation'].copy()
 
     def get_freshness_distribution(self) -> Dict[str, int]:
         """Get image count by display frequency.
@@ -129,12 +145,15 @@ class CollectionStatistics:
         - often_shown: 5-9
         - frequently_shown: >= 10
 
+        Thread-safe: cache access protected by lock.
+
         Returns:
             Dict[str, int] with category names as keys and counts as values.
             Example: {'never_shown': 142, 'rarely_shown': 50, 'often_shown': 8, 'frequently_shown': 0}
         """
         self._ensure_cache_populated()
-        return self._cache['freshness']
+        with self._lock:
+            return self._cache['freshness'].copy()
 
     def get_gaps(self) -> List[str]:
         """Identify underrepresented categories in the collection.

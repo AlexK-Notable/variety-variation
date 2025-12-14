@@ -516,5 +516,54 @@ class TestDistributions:
         assert distribution['frequently_shown'] == 2
 
 
+class TestStatisticsThreadSafety:
+    """Tests for statistics cache thread safety."""
+
+    def test_concurrent_invalidate_and_read(self, stats, db):
+        """Verify concurrent invalidate and read don't corrupt cache."""
+        import threading
+
+        # Add some test data
+        for i in range(20):
+            img = ImageRecord(filepath=f'/test/img{i}.jpg', filename=f'img{i}.jpg')
+            db.upsert_image(img)
+            palette = PaletteRecord(
+                filepath=f'/test/img{i}.jpg',
+                avg_lightness=0.5,
+                avg_saturation=0.5,
+                avg_hue=180
+            )
+            db.upsert_palette(palette)
+
+        errors = []
+
+        def reader():
+            try:
+                for _ in range(100):
+                    stats.get_lightness_distribution()
+                    stats.get_hue_distribution()
+            except Exception as e:
+                errors.append(e)
+
+        def invalidator():
+            try:
+                for _ in range(100):
+                    stats.invalidate()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+            threading.Thread(target=invalidator),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"Got errors: {errors}"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
