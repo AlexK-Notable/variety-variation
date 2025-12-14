@@ -471,7 +471,9 @@ class ThemeEngine:
         self.variety_config_path = variety_config_path or self.VARIETY_CONFIG
 
         # Template cache: name -> CachedTemplate
+        # Thread-safe: Access only through _get_cached_template() and _set_cached_template()
         self._template_cache: Dict[str, CachedTemplate] = {}
+        self._template_cache_lock = threading.Lock()
 
         # Debouncing state
         self._last_apply_time: float = 0.0
@@ -667,6 +669,8 @@ class ThemeEngine:
     def _get_cached_template(self, config: TemplateConfig) -> Optional[str]:
         """Get template content, using cache if valid.
 
+        Thread-safe: Uses lock to protect cache access.
+
         Args:
             config: Template configuration.
 
@@ -681,23 +685,28 @@ class ThemeEngine:
             logger.warning(f"Template file not found: {path}")
             return None
 
-        # Check cache
-        cached = self._template_cache.get(config.name)
-        if cached and cached.mtime == current_mtime:
-            return cached.content
+        # Check cache with lock
+        with self._template_cache_lock:
+            cached = self._template_cache.get(config.name)
+            if cached and cached.mtime == current_mtime:
+                return cached.content
 
-        # Load and cache
+        # Load template outside lock (IO operation)
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
+        except Exception as e:
+            logger.error(f"Error reading template {path}: {e}")
+            return None
+
+        # Cache the result with lock
+        with self._template_cache_lock:
             self._template_cache[config.name] = CachedTemplate(
                 content=content,
                 mtime=current_mtime,
             )
-            return content
-        except Exception as e:
-            logger.error(f"Error reading template {path}: {e}")
-            return None
+
+        return content
 
     def _write_atomic(self, path: str, content: str) -> bool:
         """Write content to file atomically using temp file + rename.
@@ -931,8 +940,10 @@ class ThemeEngine:
         """Reload configuration from disk.
 
         Call this after modifying wallust.toml or theming.json.
+        Thread-safe: Uses lock to protect cache clear operation.
         """
-        self._template_cache.clear()
+        with self._template_cache_lock:
+            self._template_cache.clear()
         self._reload()
         logger.info(f"Reloaded config: {len(self._templates)} templates")
 

@@ -913,5 +913,87 @@ class TestThemeEngineTimerManagement(unittest.TestCase):
         self.assertTrue(engine._debounce_timer is None or not engine._debounce_timer.is_alive())
 
 
+class TestThemeEngineCacheThreadSafety(unittest.TestCase):
+    """Tests for template cache thread safety."""
+
+    def setUp(self):
+        """Set up test environment."""
+        import tempfile
+        import json
+
+        self.temp_dir = tempfile.mkdtemp()
+        self.wallust_config = os.path.join(self.temp_dir, 'wallust.toml')
+        self.variety_config = os.path.join(self.temp_dir, 'theming.json')
+
+        # Create minimal wallust config
+        with open(self.wallust_config, 'w') as f:
+            f.write('[templates]\n')
+            f.write('test = { template = "test.conf", target = "/tmp/test.conf" }\n')
+
+        # Create test template
+        template_path = os.path.join(self.temp_dir, 'test.conf')
+        with open(template_path, 'w') as f:
+            f.write('color={{color0}}\n')
+
+        # Update wallust config with full path
+        with open(self.wallust_config, 'w') as f:
+            f.write('[templates]\n')
+            f.write(f'test = {{ template = "{template_path}", target = "/tmp/test.conf" }}\n')
+
+        # Create variety config
+        config = {'enabled': True}
+        with open(self.variety_config, 'w') as f:
+            json.dump(config, f)
+
+        # Test palette
+        self.palette = {
+            'color0': '#ff0000',
+            'background': '#000000',
+            'foreground': '#ffffff',
+        }
+
+    def tearDown(self):
+        """Clean up test directories."""
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    def _get_test_palette(self, image_path: str) -> dict:
+        """Mock palette getter."""
+        return self.palette
+
+    def test_concurrent_template_cache_access(self):
+        """Verify concurrent cache access doesn't corrupt data."""
+        from variety.smart_selection.theming import ThemeEngine
+        import threading
+
+        engine = ThemeEngine(
+            self._get_test_palette,
+            wallust_config_path=self.wallust_config,
+            variety_config_path=self.variety_config,
+        )
+
+        errors = []
+
+        def accessor():
+            try:
+                for i in range(50):
+                    # Access template cache through normal apply flow
+                    # This will trigger _get_cached_template calls
+                    engine.apply(f"/test/image{i}.jpg", debounce=False)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=accessor) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(errors), 0, f"Got errors: {errors}")
+
+        # Clean up
+        engine.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()
