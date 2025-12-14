@@ -114,6 +114,12 @@ class SmartSelector:
         source_ids = list(set(img.source_id for img in candidates if img.source_id))
         sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
 
+        # Batch-load palettes if color constraints are active
+        palettes = {}
+        if target_palette and self.config.color_match_weight:
+            filepaths = [img.filepath for img in candidates]
+            palettes = self.db.get_palettes_by_filepaths(filepaths)
+
         # Calculate weights for each candidate
         weights = []
         for img in candidates:
@@ -122,9 +128,7 @@ class SmartSelector:
                 source_last_shown = sources[img.source_id].last_shown_at
 
             # Get image palette for color affinity calculation
-            image_palette = None
-            if target_palette and self.config.color_match_weight:
-                image_palette = self.db.get_palette(img.filepath)
+            image_palette = palettes.get(img.filepath) if palettes else None
 
             weight = calculate_weight(
                 img, source_last_shown, self.config,
@@ -565,6 +569,12 @@ class SmartSelector:
         source_ids = list(set(img.source_id for img in candidates if img.source_id))
         sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
 
+        # Batch-load palettes if color constraints are active
+        palettes = {}
+        if target_palette and self.config.color_match_weight:
+            filepaths = [img.filepath for img in candidates]
+            palettes = self.db.get_palettes_by_filepaths(filepaths)
+
         # Calculate weights for each candidate
         weighted_candidates = []
         for img in candidates:
@@ -573,9 +583,7 @@ class SmartSelector:
                 source_last_shown = sources[img.source_id].last_shown_at
 
             # Get image palette for color affinity calculation
-            image_palette = None
-            if target_palette and self.config.color_match_weight:
-                image_palette = self.db.get_palette(img.filepath)
+            image_palette = palettes.get(img.filepath) if palettes else None
 
             weight = calculate_weight(
                 img, source_last_shown, self.config,

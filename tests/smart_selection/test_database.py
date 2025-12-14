@@ -1111,5 +1111,49 @@ class TestBatchDeleteImages(unittest.TestCase):
         db.close()
 
 
+class TestBatchPaletteLoading(unittest.TestCase):
+    """Tests for batch palette loading."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_get_palettes_by_filepaths(self):
+        """Verify batch palette loading returns correct records."""
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Create test images and palettes
+        for i in range(5):
+            filepath = f"/test/image{i}.jpg"
+            image = ImageRecord(filepath=filepath, filename=f"image{i}.jpg")
+            db.upsert_image(image)
+
+            if i < 3:  # Only first 3 have palettes
+                palette = PaletteRecord(filepath=filepath, color0="#ffffff")
+                db.upsert_palette(palette)
+
+        # Fetch all filepaths
+        filepaths = [f"/test/image{i}.jpg" for i in range(5)]
+        result = db.get_palettes_by_filepaths(filepaths)
+
+        self.assertEqual(len(result), 3)  # Only 3 have palettes
+        self.assertIn("/test/image0.jpg", result)
+        self.assertIn("/test/image1.jpg", result)
+        self.assertIn("/test/image2.jpg", result)
+        self.assertNotIn("/test/image3.jpg", result)
+
+        db.close()
+
+
 if __name__ == '__main__':
     unittest.main()

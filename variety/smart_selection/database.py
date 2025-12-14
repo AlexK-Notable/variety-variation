@@ -679,6 +679,55 @@ class ImageDatabase:
             ''')
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
+    def get_palettes_by_filepaths(self, filepaths: List[str]) -> Dict[str, PaletteRecord]:
+        """Get multiple palette records by their filepaths.
+
+        Args:
+            filepaths: List of image filepaths to fetch palettes for.
+
+        Returns:
+            Dict mapping filepath to PaletteRecord (missing filepaths omitted).
+        """
+        if not filepaths:
+            return {}
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            # Process in chunks to avoid SQLite parameter limit
+            result = {}
+            for i in range(0, len(filepaths), 500):
+                chunk = filepaths[i:i+500]
+                placeholders = ','.join('?' * len(chunk))
+                cursor.execute(
+                    f'SELECT * FROM palettes WHERE filepath IN ({placeholders})',
+                    chunk
+                )
+                for row in cursor.fetchall():
+                    record = self._row_to_palette_record(row)
+                    result[record.filepath] = record
+
+        return result
+
+    def _row_to_palette_record(self, row) -> PaletteRecord:
+        """Convert a database row to a PaletteRecord."""
+        return PaletteRecord(
+            filepath=row['filepath'],
+            color0=row['color0'], color1=row['color1'],
+            color2=row['color2'], color3=row['color3'],
+            color4=row['color4'], color5=row['color5'],
+            color6=row['color6'], color7=row['color7'],
+            color8=row['color8'], color9=row['color9'],
+            color10=row['color10'], color11=row['color11'],
+            color12=row['color12'], color13=row['color13'],
+            color14=row['color14'], color15=row['color15'],
+            background=row['background'], foreground=row['foreground'],
+            cursor=row['cursor'],
+            avg_hue=row['avg_hue'], avg_saturation=row['avg_saturation'],
+            avg_lightness=row['avg_lightness'],
+            color_temperature=row['color_temperature'],
+            indexed_at=row['indexed_at'],
+        )
+
     # =========================================================================
     # Statistics Queries
     # =========================================================================
