@@ -539,6 +539,38 @@ class ImageDatabase:
             ''', (now, source_id))
             self.conn.commit()
 
+    def get_sources_by_ids(self, source_ids: List[str]) -> Dict[str, SourceRecord]:
+        """Get multiple source records by their IDs.
+
+        Args:
+            source_ids: List of source IDs to fetch.
+
+        Returns:
+            Dict mapping source_id to SourceRecord (missing IDs omitted).
+        """
+        if not source_ids:
+            return {}
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            placeholders = ','.join('?' * len(source_ids))
+            cursor.execute(
+                f'SELECT * FROM sources WHERE source_id IN ({placeholders})',
+                source_ids
+            )
+            rows = cursor.fetchall()
+
+        result = {}
+        for row in rows:
+            record = SourceRecord(
+                source_id=row['source_id'],
+                source_type=row['source_type'],
+                last_shown_at=row['last_shown_at'],
+                times_shown=row['times_shown'],
+            )
+            result[record.source_id] = record
+        return result
+
     # =========================================================================
     # Palette CRUD Operations
     # =========================================================================

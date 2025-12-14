@@ -991,6 +991,46 @@ class TestStatisticsQueries(unittest.TestCase):
             self.assertEqual(result, results[0])
 
 
+class TestBatchSourceLoading(unittest.TestCase):
+    """Tests for batch source loading."""
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_get_sources_by_ids(self):
+        """Verify batch source loading returns correct records."""
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import SourceRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Create test sources
+        for i in range(5):
+            source = SourceRecord(
+                source_id=f"source_{i}",
+                source_type="test",
+            )
+            db.upsert_source(source)
+
+        # Fetch subset
+        result = db.get_sources_by_ids(["source_1", "source_3", "source_99"])
+
+        self.assertEqual(len(result), 2)  # source_99 doesn't exist
+        self.assertIn("source_1", result)
+        self.assertIn("source_3", result)
+        self.assertNotIn("source_99", result)
+
+        db.close()
+
+
 class TestBatchDeleteImages(unittest.TestCase):
     """Tests for batch_delete_images functionality."""
 

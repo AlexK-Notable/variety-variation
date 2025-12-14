@@ -110,14 +110,16 @@ class SmartSelector:
         # Extract target palette from constraints for color affinity
         target_palette = constraints.target_palette if constraints else None
 
+        # Batch-load all source records for candidates to avoid N+1 queries
+        source_ids = list(set(img.source_id for img in candidates if img.source_id))
+        sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
+
         # Calculate weights for each candidate
         weights = []
         for img in candidates:
             source_last_shown = None
-            if img.source_id:
-                source = self.db.get_source(img.source_id)
-                if source:
-                    source_last_shown = source.last_shown_at
+            if img.source_id and img.source_id in sources:
+                source_last_shown = sources[img.source_id].last_shown_at
 
             # Get image palette for color affinity calculation
             image_palette = None
@@ -559,14 +561,16 @@ class SmartSelector:
         # Extract target palette from constraints for color affinity
         target_palette = constraints.target_palette if constraints else None
 
+        # Batch-load all source records for candidates to avoid N+1 queries
+        source_ids = list(set(img.source_id for img in candidates if img.source_id))
+        sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
+
         # Calculate weights for each candidate
         weighted_candidates = []
         for img in candidates:
             source_last_shown = None
-            if img.source_id:
-                source = self.db.get_source(img.source_id)
-                if source:
-                    source_last_shown = source.last_shown_at
+            if img.source_id and img.source_id in sources:
+                source_last_shown = sources[img.source_id].last_shown_at
 
             # Get image palette for color affinity calculation
             image_palette = None
