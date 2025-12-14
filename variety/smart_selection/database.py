@@ -664,20 +664,34 @@ class ImageDatabase:
             ''')
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
-    def get_images_without_palettes(self) -> List[ImageRecord]:
-        """Get images that don't have palette data.
+    def get_images_without_palettes(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[ImageRecord]:
+        """Get images that don't have palette records.
+
+        Args:
+            limit: Maximum number of records to return.
+            offset: Number of records to skip (for pagination).
 
         Returns:
-            List of ImageRecords without associated palette records.
+            List of ImageRecord objects without associated palettes.
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('''
+            query = '''
                 SELECT i.* FROM images i
                 LEFT JOIN palettes p ON i.filepath = p.filepath
                 WHERE p.filepath IS NULL
-            ''')
-            return [self._row_to_image_record(row) for row in cursor.fetchall()]
+            '''
+            if limit:
+                query += f' LIMIT {limit} OFFSET {offset}'
+
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+        return [self._row_to_image_record(row) for row in rows]
 
     def get_palettes_by_filepaths(self, filepaths: List[str]) -> Dict[str, PaletteRecord]:
         """Get multiple palette records by their filepaths.

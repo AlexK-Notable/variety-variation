@@ -1225,5 +1225,101 @@ class TestSmartSelectorResourceManagement(unittest.TestCase):
         self.assertIsNone(selector.db)
 
 
+class TestExtractAllPalettesMemory(unittest.TestCase):
+    """Tests for extract_all_palettes memory usage."""
+
+    def setUp(self):
+        """Create temporary directory."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_extract_all_palettes_uses_batches(self):
+        """Verify extraction processes in batches, not all at once."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.models import ImageRecord
+        from variety.smart_selection.palette import create_palette_record
+        from unittest.mock import patch
+
+        selector = SmartSelector(
+            db_path=self.db_path,
+            config=SelectionConfig(),
+            enable_palette_extraction=True,
+        )
+
+        # Track batch sizes
+        batch_sizes = []
+        original_method = selector.db.get_images_without_palettes
+
+        def tracking_get_images(limit=None, offset=0):
+            result = original_method(limit=limit, offset=offset)
+            batch_sizes.append(len(result))
+            return result
+
+        # Monkey patch the method
+        selector.db.get_images_without_palettes = tracking_get_images
+
+        # Add many images
+        for i in range(1500):
+            image = ImageRecord(
+                filepath=f"/test/image{i}.jpg",
+                filename=f"image{i}.jpg",
+            )
+            selector.db.upsert_image(image)
+
+        # Mock palette data that will be stored
+        mock_palette_data = {
+            'color0': '#000000', 'color1': '#111111', 'color2': '#222222', 'color3': '#333333',
+            'color4': '#444444', 'color5': '#555555', 'color6': '#666666', 'color7': '#777777',
+            'color8': '#888888', 'color9': '#999999', 'color10': '#aaaaaa', 'color11': '#bbbbbb',
+            'color12': '#cccccc', 'color13': '#dddddd', 'color14': '#eeeeee', 'color15': '#ffffff',
+            'background': '#000000', 'foreground': '#ffffff', 'cursor': '#ffffff'
+        }
+
+        # Run extraction with mock that returns palette data
+        with patch.object(selector._palette_extractor, 'extract_palette', return_value=mock_palette_data):
+            selector.extract_all_palettes(batch_size=500)
+
+        # Should have processed in batches of 500 max
+        self.assertGreater(len(batch_sizes), 0)
+        self.assertLessEqual(max(batch_sizes), 500)
+
+        selector.close()
+
+    def test_extract_all_palettes_handles_all_failures(self):
+        """Verify no infinite loop when all extractions fail."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.models import ImageRecord
+        from unittest.mock import patch
+
+        selector = SmartSelector(
+            db_path=self.db_path,
+            config=SelectionConfig(),
+            enable_palette_extraction=True,
+        )
+
+        # Add test images
+        for i in range(100):
+            image = ImageRecord(
+                filepath=f"/test/image{i}.jpg",
+                filename=f"image{i}.jpg",
+            )
+            selector.db.upsert_image(image)
+
+        # Mock extraction to always fail (return None)
+        with patch.object(selector._palette_extractor, 'extract_palette', return_value=None):
+            result = selector.extract_all_palettes(batch_size=50)
+
+        # Should return 0 without hanging
+        self.assertEqual(result, 0)
+
+        selector.close()
+
+
 if __name__ == '__main__':
     unittest.main()

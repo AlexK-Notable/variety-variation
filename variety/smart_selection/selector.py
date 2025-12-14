@@ -10,7 +10,7 @@ import os
 import random
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Callable, Set, TYPE_CHECKING
 
 from variety.smart_selection.database import ImageDatabase
 from variety.smart_selection.config import SelectionConfig
@@ -439,17 +439,21 @@ class SmartSelector:
         if self._statistics:
             self._statistics.invalidate()
 
-    def extract_all_palettes(self, progress_callback: Callable[[int, int], None] = None):
-        """Extract color palettes for all indexed images without palettes.
+    def extract_all_palettes(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        batch_size: int = 500,
+    ) -> int:
+        """Extract palettes for all images that don't have them.
 
-        Uses wallust to extract color palettes for images that don't have
-        palette data yet.
+        Processes in batches to limit memory usage for large collections.
 
         Args:
-            progress_callback: Optional callback(current, total) for progress updates.
+            progress_callback: Optional callback(current, total) for progress.
+            batch_size: Number of images to process per batch.
 
         Returns:
-            Number of palettes extracted.
+            Number of palettes successfully extracted.
         """
         if not self._palette_extractor:
             self._palette_extractor = PaletteExtractor()
@@ -458,33 +462,44 @@ class SmartSelector:
             logger.warning("wallust is not available for palette extraction")
             return 0
 
-        images = self.db.get_images_without_palettes()
-        total = len(images)
-        extracted = 0
+        extracted_count = 0
+        failed_files: Set[str] = set()  # Track failures to avoid infinite loop
 
-        for i, image in enumerate(images):
-            if progress_callback:
-                progress_callback(i, total)
+        while True:
+            # Fetch batch - offset=0 because successful extractions get palettes
+            # so they won't appear in next query
+            images = self.db.get_images_without_palettes(limit=batch_size, offset=0)
 
-            try:
+            # Filter out previously failed images to prevent infinite loop
+            images = [img for img in images if img.filepath not in failed_files]
+
+            if not images:
+                break
+
+            for image in images:
                 palette_data = self._palette_extractor.extract_palette(image.filepath)
                 if palette_data:
-                    palette_record = create_palette_record(image.filepath, palette_data)
-                    self.db.upsert_palette(palette_record)
-                    extracted += 1
-            except Exception as e:
-                logger.warning(f"Failed to extract palette for {image.filepath}: {e}")
+                    try:
+                        palette_record = create_palette_record(image.filepath, palette_data)
+                        self.db.upsert_palette(palette_record)
+                        extracted_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to store palette for {image.filepath}: {e}")
+                        failed_files.add(image.filepath)
+                else:
+                    # Extraction failed - mark to avoid retry
+                    failed_files.add(image.filepath)
 
-        if progress_callback:
-            progress_callback(total, total)
+                if progress_callback:
+                    progress_callback(extracted_count, -1)  # Total unknown
 
-        logger.info(f"Extracted {extracted} palettes out of {total} images")
+        logger.info(f"Extracted {extracted_count} palettes")
 
         # Invalidate statistics cache (color distributions change)
-        if extracted > 0 and self._statistics:
+        if extracted_count > 0 and self._statistics:
             self._statistics.invalidate()
 
-        return extracted
+        return extracted_count
 
     # =========================================================================
     # Time-Based Selection Methods
