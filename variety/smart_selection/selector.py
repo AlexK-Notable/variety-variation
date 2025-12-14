@@ -47,15 +47,25 @@ class SmartSelector:
             db_path: Path to SQLite database file.
             config: SelectionConfig with weight parameters.
             enable_palette_extraction: If True, extract color palettes when images are shown.
+
+        Raises:
+            Exception: If initialization fails. Database is closed on failure.
         """
         self.db = ImageDatabase(db_path)
-        self.config = config
         self._owns_db = True
-        self._enable_palette_extraction = enable_palette_extraction
-        self._palette_extractor = None
-        self._statistics: Optional['CollectionStatistics'] = None
-        if enable_palette_extraction:
-            self._palette_extractor = PaletteExtractor()
+
+        try:
+            self.config = config
+            self._enable_palette_extraction = enable_palette_extraction
+            self._palette_extractor = None
+            self._statistics: Optional['CollectionStatistics'] = None
+            if enable_palette_extraction:
+                self._palette_extractor = PaletteExtractor()
+        except Exception:
+            # Clean up database on any initialization failure
+            self.db.close()
+            self.db = None
+            raise
 
     def __enter__(self):
         """Context manager entry."""

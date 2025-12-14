@@ -1041,5 +1041,61 @@ class TestStatisticsIntegration(unittest.TestCase):
                 "Cache should be invalidated after rebuild_index")
 
 
+class TestSmartSelectorResourceManagement(unittest.TestCase):
+    """Tests for resource cleanup in SmartSelector."""
+
+    def setUp(self):
+        """Create temporary directory."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_db_closed_on_palette_extractor_failure(self):
+        """Verify database is closed if PaletteExtractor init fails."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+        from variety.smart_selection.database import ImageDatabase
+        from unittest.mock import patch, MagicMock
+
+        # Track if close was called
+        close_called = []
+        original_close = ImageDatabase.close
+
+        def tracking_close(self):
+            close_called.append(True)
+            original_close(self)
+
+        with patch.object(ImageDatabase, 'close', tracking_close):
+            with patch('variety.smart_selection.selector.PaletteExtractor') as mock_pe:
+                mock_pe.side_effect = RuntimeError("Failed to init PaletteExtractor")
+
+                with self.assertRaises(RuntimeError, msg="Failed to init"):
+                    SmartSelector(
+                        db_path=self.db_path,
+                        config=SelectionConfig(),
+                        enable_palette_extraction=True,
+                    )
+
+        # Database should have been closed despite the exception
+        self.assertEqual(len(close_called), 1, "Database was not closed on init failure")
+
+    def test_db_not_leaked_on_normal_init(self):
+        """Verify normal init doesn't double-close or leak."""
+        from variety.smart_selection.selector import SmartSelector
+        from variety.smart_selection.config import SelectionConfig
+
+        selector = SmartSelector(
+            db_path=self.db_path,
+            config=SelectionConfig(),
+            enable_palette_extraction=False,
+        )
+        self.assertIsNotNone(selector.db)
+        selector.close()
+        self.assertIsNone(selector.db)
+
+
 if __name__ == '__main__':
     unittest.main()
