@@ -797,15 +797,19 @@ class ThemeEngine:
         with self._debounce_lock:
             self._pending_image = image_path
 
-            # Cancel any existing timer
+            # Cancel and clean up any existing timer
             if self._debounce_timer is not None:
                 self._debounce_timer.cancel()
+                # Don't join here - it could block if timer is executing
+                # The timer will clean up on its own
+                self._debounce_timer = None
 
             # Start new timer
             self._debounce_timer = threading.Timer(
                 self.DEBOUNCE_INTERVAL,
                 self._apply_pending,
             )
+            self._debounce_timer.daemon = True  # Don't prevent process exit
             self._debounce_timer.start()
 
         return True
@@ -941,8 +945,21 @@ class ThemeEngine:
         return self._enabled
 
     def cleanup(self) -> None:
-        """Clean up resources (cancel pending timers)."""
+        """Clean up resources including pending timers.
+
+        Thread-safe: Acquires debounce lock before modifying timer state.
+        Cancels any pending timer and clears pending image path.
+        """
         with self._debounce_lock:
             if self._debounce_timer is not None:
                 self._debounce_timer.cancel()
                 self._debounce_timer = None
+            self._pending_image = None
+
+    def close(self) -> None:
+        """Close and clean up resources (alias for cleanup()).
+
+        This method is provided for consistency with other resource
+        managers that use close() instead of cleanup().
+        """
+        self.cleanup()

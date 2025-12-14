@@ -812,5 +812,106 @@ class TestThemeEngine(unittest.TestCase):
         self.assertFalse(engine2.is_enabled())
 
 
+class TestThemeEngineTimerManagement(unittest.TestCase):
+    """Tests for timer resource management."""
+
+    def setUp(self):
+        """Create test directories and files."""
+        import tempfile
+        import shutil
+        self.temp_dir = tempfile.mkdtemp()
+
+        # Create test palette
+        self.palette = {
+            'color0': '#1a1a1a',
+            'background': '#000000',
+            'foreground': '#e0e0e0',
+        }
+
+        # Create wallust.toml
+        self.wallust_config = os.path.join(self.temp_dir, 'wallust.toml')
+        self.templates_dir = os.path.join(self.temp_dir, 'templates')
+        self.output_dir = os.path.join(self.temp_dir, 'output')
+        os.makedirs(self.templates_dir)
+        os.makedirs(self.output_dir)
+
+        # Create test template
+        self.template_path = os.path.join(self.templates_dir, 'test.conf')
+        with open(self.template_path, 'w') as f:
+            f.write('background = {{background}}\n')
+
+        self.target_path = os.path.join(self.output_dir, 'test.conf')
+
+        # Write wallust.toml
+        with open(self.wallust_config, 'w') as f:
+            f.write('[templates]\n')
+            f.write(f'test = {{ template = "{self.template_path}", target = "{self.target_path}" }}\n')
+
+        # Create variety config
+        self.variety_config = os.path.join(self.temp_dir, 'theming.json')
+
+    def tearDown(self):
+        """Clean up test directories."""
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    def _get_test_palette(self, image_path: str) -> dict:
+        """Mock palette getter."""
+        return self.palette
+
+    def test_rapid_debounce_does_not_leak_timers(self):
+        """Verify rapid apply_debounced calls don't accumulate timer threads."""
+        from variety.smart_selection.theming import ThemeEngine
+        import threading
+        import time
+
+        initial_thread_count = threading.active_count()
+
+        engine = ThemeEngine(
+            self._get_test_palette,
+            wallust_config_path=self.wallust_config,
+            variety_config_path=self.variety_config,
+        )
+
+        # Simulate rapid wallpaper changes
+        for i in range(100):
+            engine.apply(f"/test/image{i}.jpg", debounce=True)
+
+        # Wait a moment for timers to be created/cancelled
+        time.sleep(0.1)
+
+        # Active thread count should not have grown significantly
+        # Allow for some variance (the debounce timer + a few extra)
+        current_thread_count = threading.active_count()
+        thread_growth = current_thread_count - initial_thread_count
+
+        # Should have at most a few extra threads (debounce timer, maybe 1-2 others)
+        self.assertLess(thread_growth, 10, f"Thread count grew by {thread_growth}, possible timer leak")
+
+        # Clean up
+        engine.cleanup()
+
+    def test_cleanup_cancels_pending_timer(self):
+        """Verify cleanup() properly cancels any pending debounce timer."""
+        from variety.smart_selection.theming import ThemeEngine
+
+        engine = ThemeEngine(
+            self._get_test_palette,
+            wallust_config_path=self.wallust_config,
+            variety_config_path=self.variety_config,
+        )
+
+        engine.apply("/test/image.jpg", debounce=True)
+
+        # Timer should be pending
+        self.assertIsNotNone(engine._debounce_timer)
+
+        # Cleanup should cancel the timer
+        engine.cleanup()
+
+        # Timer should be cancelled and set to None
+        self.assertTrue(engine._debounce_timer is None or not engine._debounce_timer.is_alive())
+
+
 if __name__ == '__main__':
     unittest.main()
