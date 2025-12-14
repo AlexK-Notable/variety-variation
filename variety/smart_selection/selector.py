@@ -268,6 +268,24 @@ class SmartSelector:
         Updates the image's last_shown_at, times_shown, and
         optionally stores the wallust palette.
 
+        Thread Safety:
+            This method is thread-safe in that it will never corrupt data or crash,
+            but concurrent calls may result in lost count updates. Specifically:
+
+            1. upsert_image() uses INSERT...ON CONFLICT DO UPDATE (atomic)
+            2. record_image_shown() uses UPDATE times_shown + 1 (atomic)
+            3. SQLite serializes writes, ensuring database consistency
+
+            However, if multiple threads call this for the same NEW image concurrently:
+            - Multiple threads may index the image independently
+            - Later upsert_image() calls may overwrite times_shown=0, losing increments
+            - Final count may be less than the actual number of calls
+
+            This is acceptable because:
+            - No data corruption occurs (database remains consistent)
+            - In production, record_shown is called from a single thread
+            - Approximate counts are sufficient for wallpaper selection weighting
+
         Args:
             filepath: Path to the image that was shown.
             wallust_palette: Optional pre-extracted wallust color palette dict.
