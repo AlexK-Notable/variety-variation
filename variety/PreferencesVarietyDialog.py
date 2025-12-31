@@ -24,7 +24,7 @@ import stat
 import subprocess
 import threading
 
-from gi.repository import Gdk, GdkPixbuf, GObject, Gtk  # pylint: disable=E0611
+from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk  # pylint: disable=E0611
 
 from variety import Texts
 from variety.AddConfigurableDialog import AddConfigurableDialog
@@ -52,6 +52,89 @@ logger = logging.getLogger("variety")
 SLIDESHOW_PAGE_INDEX = 4
 SMART_SELECTION_PAGE_INDEX = 7
 DONATE_PAGE_INDEX = 11
+
+# Tooltips for Smart Selection controls
+SMART_SELECTION_TOOLTIPS = {
+    "smart_selection_enabled": _("Use intelligent selection instead of random"),
+    "smart_image_cooldown": _("Days before a wallpaper can repeat"),
+    "smart_source_cooldown": _("Days before favoring the same source again"),
+    "smart_favorite_boost": _("How much more likely favorites are selected"),
+    "smart_new_boost": _("How much more likely new images are selected"),
+    "smart_decay_type": _("How quickly the recency penalty decreases over time"),
+    "smart_color_enabled": _("Prefer wallpapers with similar color palettes"),
+    "smart_color_temperature": _("Target color warmth for wallpaper selection"),
+    "smart_color_similarity": _("Minimum similarity for color matching"),
+    "smart_time_adaptation": _("Adjust palette preferences based on time of day"),
+    "smart_theming_enabled": _("Update system theme colors when wallpaper changes"),
+    "smart_theming_configure": _("Configure wallust theming templates"),
+    "smart_rebuild_index": _("Rebuild the image index from scratch"),
+    "smart_extract_palettes": _("Extract color palettes for all indexed images"),
+    "smart_clear_history": _("Clear selection history and recency data"),
+    "smart_preview_button": _("Preview which wallpapers would be selected next"),
+}
+
+# Extended help content for info popovers
+SMART_SELECTION_HELP = {
+    "overview": _(
+        "Smart Selection replaces random wallpaper rotation with intelligent "
+        "weighted selection. Images are scored based on recency (recently shown "
+        "images have lower scores), source diversity, favorites status, and "
+        "color palette matching.\n\n"
+        "The algorithm ensures variety while respecting your preferences. "
+        "Favorites appear more often, recently shown images get a cooldown "
+        "period, and sources are balanced so one folder doesn't dominate.\n\n"
+        "Statistics show how many images are indexed, palette extraction "
+        "progress, and selection history."
+    ),
+    "time_adaptation": _(
+        "Time adaptation adjusts which wallpapers are preferred based on the "
+        "time of day. During the day, brighter and optionally warmer palettes "
+        "are favored. At night, darker and cooler palettes take priority.\n\n"
+        "Three timing methods are available:\n"
+        "- Sunrise/Sunset - uses your location to calculate actual daylight hours\n"
+        "- Fixed Schedule - set specific times for day and night\n"
+        "- System Theme - follows your desktop's dark/light mode setting\n\n"
+        "Presets provide quick configurations, or use Custom with the sliders "
+        "for precise control."
+    ),
+    "color_matching": _(
+        "Color matching uses the OKLAB perceptual color space to find "
+        "wallpapers with similar palettes. OKLAB ensures that visually similar "
+        "colors are mathematically close, unlike simpler color models.\n\n"
+        "When enabled, wallpapers with palettes similar to your target "
+        "preferences receive a selection boost. This works alongside time "
+        "adaptation - if both are enabled, the current time period's target "
+        "palette is used.\n\n"
+        "Palettes are automatically extracted when wallpapers are shown. "
+        "The 'Images with palettes' statistic shows extraction progress."
+    ),
+    "presets": _(
+        "Presets provide quick configurations for common preferences:\n\n"
+        "- Bright Day - energetic, sunlit feel (high lightness, warm)\n"
+        "- Neutral Day - balanced, non-distracting\n"
+        "- Cozy Night - warm, dim, relaxed atmosphere\n"
+        "- Cool Night - blue-tinted, modern feel\n"
+        "- Dark Mode - minimal eye strain, low lightness\n"
+        "- Custom - configure your own values with sliders"
+    ),
+    "decay_types": _(
+        "The decay type controls how the recency penalty decreases over time:\n\n"
+        "- Exponential - penalty drops rapidly at first, then slowly (recommended)\n"
+        "- Linear - penalty decreases at a constant rate\n"
+        "- Step - full penalty until cooldown expires, then none\n\n"
+        "Exponential decay provides the most natural-feeling variety, "
+        "preventing immediate repeats while allowing occasional returns "
+        "to recently-shown favorites."
+    ),
+    "theming": _(
+        "The theming engine integrates with wallust to update your system "
+        "theme colors based on the current wallpaper's palette.\n\n"
+        "When enabled, wallust extracts colors from each new wallpaper and "
+        "applies them to configured templates (terminal, GTK theme, etc.).\n\n"
+        "Click 'Configure' to edit your wallust.toml file, which defines "
+        "which templates are updated and how colors are mapped."
+    ),
+}
 
 
 class PreferencesVarietyDialog(PreferencesDialog):
@@ -360,6 +443,47 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.ui.smart_color_similarity.set_value(self.options.smart_color_similarity)
             self.ui.smart_time_adaptation.set_active(self.options.smart_time_adaptation)
 
+            # Time adaptation settings
+            if hasattr(self.options, 'smart_time_method'):
+                time_methods = {"sunrise_sunset": 0, "fixed": 1, "system_theme": 2}
+                self.ui.smart_time_method.set_active(
+                    time_methods.get(self.options.smart_time_method, 1)  # default to "fixed"
+                )
+            if hasattr(self.options, 'smart_day_start') and hasattr(self.ui, 'smart_day_start'):
+                self.ui.smart_day_start.set_text(self.options.smart_day_start or "07:00")
+            if hasattr(self.options, 'smart_night_start') and hasattr(self.ui, 'smart_night_start'):
+                self.ui.smart_night_start.set_text(self.options.smart_night_start or "19:00")
+            if hasattr(self.options, 'smart_location_name') and hasattr(self.ui, 'smart_location_name'):
+                self.ui.smart_location_name.set_text(self.options.smart_location_name or "")
+            if hasattr(self.options, 'smart_location_lat') and self.options.smart_location_lat is not None:
+                self._location_lat = self.options.smart_location_lat
+            if hasattr(self.options, 'smart_location_lon') and self.options.smart_location_lon is not None:
+                self._location_lon = self.options.smart_location_lon
+            if hasattr(self.options, 'smart_day_preset') and hasattr(self.ui, 'smart_day_preset'):
+                presets = {"bright_day": 0, "neutral_day": 1, "custom": 2}
+                self.ui.smart_day_preset.set_active(
+                    presets.get(self.options.smart_day_preset, 1)  # default to "neutral_day"
+                )
+            if hasattr(self.options, 'smart_night_preset') and hasattr(self.ui, 'smart_night_preset'):
+                presets = {"cozy_night": 0, "cool_night": 1, "dark_mode": 2, "custom": 3}
+                self.ui.smart_night_preset.set_active(
+                    presets.get(self.options.smart_night_preset, 0)  # default to "cozy_night"
+                )
+            if hasattr(self.options, 'smart_day_lightness') and hasattr(self.ui, 'smart_day_lightness'):
+                self.ui.smart_day_lightness.set_value(self.options.smart_day_lightness)
+            if hasattr(self.options, 'smart_day_temperature') and hasattr(self.ui, 'smart_day_temperature'):
+                self.ui.smart_day_temperature.set_value(self.options.smart_day_temperature)
+            if hasattr(self.options, 'smart_day_saturation') and hasattr(self.ui, 'smart_day_saturation'):
+                self.ui.smart_day_saturation.set_value(self.options.smart_day_saturation)
+            if hasattr(self.options, 'smart_night_lightness') and hasattr(self.ui, 'smart_night_lightness'):
+                self.ui.smart_night_lightness.set_value(self.options.smart_night_lightness)
+            if hasattr(self.options, 'smart_night_temperature') and hasattr(self.ui, 'smart_night_temperature'):
+                self.ui.smart_night_temperature.set_value(self.options.smart_night_temperature)
+            if hasattr(self.options, 'smart_night_saturation') and hasattr(self.ui, 'smart_night_saturation'):
+                self.ui.smart_night_saturation.set_value(self.options.smart_night_saturation)
+            if hasattr(self.options, 'smart_palette_tolerance') and hasattr(self.ui, 'smart_palette_tolerance'):
+                self.ui.smart_palette_tolerance.set_value(self.options.smart_palette_tolerance)
+
             # Theming Engine settings
             if hasattr(self.options, 'smart_theming_enabled'):
                 self.ui.smart_theming_enabled.set_active(self.options.smart_theming_enabled)
@@ -377,6 +501,10 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
             # Build Collection Insights section
             self._build_insights_section()
+
+            # Setup Smart Selection tooltips and help buttons
+            self._setup_smart_selection_tooltips()
+            self._connect_help_buttons()
 
             self.ui.tips_buffer.set_text(
                 "\n\n".join(
@@ -410,6 +538,11 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.on_smart_selection_enabled_toggled()
             self.on_smart_color_enabled_toggled()
             self.on_smart_color_temperature_changed()
+            # Initialize time adaptation controls visibility
+            self.on_smart_time_adaptation_toggled()
+            self.on_smart_time_method_changed()
+            self.on_smart_day_preset_changed()
+            self.on_smart_night_preset_changed()
             self._hide_unimplemented_controls()
         finally:
             # To be sure we are completely loaded, pass via two hops: first delay, then idle_add:
@@ -1217,6 +1350,50 @@ class PreferencesVarietyDialog(PreferencesDialog):
             )
             self.options.smart_time_adaptation = self.ui.smart_time_adaptation.get_active()
 
+            # Time adaptation settings
+            if hasattr(self.ui, 'smart_time_method'):
+                time_methods = ["sunrise_sunset", "fixed", "system_theme"]
+                method_idx = self.ui.smart_time_method.get_active()
+                if 0 <= method_idx < len(time_methods):
+                    self.options.smart_time_method = time_methods[method_idx]
+
+            if hasattr(self.ui, 'smart_day_start'):
+                self.options.smart_day_start = self.ui.smart_day_start.get_text().strip() or "07:00"
+            if hasattr(self.ui, 'smart_night_start'):
+                self.options.smart_night_start = self.ui.smart_night_start.get_text().strip() or "19:00"
+            if hasattr(self.ui, 'smart_location_name'):
+                self.options.smart_location_name = self.ui.smart_location_name.get_text().strip()
+            if hasattr(self, '_location_lat'):
+                self.options.smart_location_lat = self._location_lat
+            if hasattr(self, '_location_lon'):
+                self.options.smart_location_lon = self._location_lon
+
+            if hasattr(self.ui, 'smart_day_preset'):
+                presets = ["bright_day", "neutral_day", "custom"]
+                preset_idx = self.ui.smart_day_preset.get_active()
+                if 0 <= preset_idx < len(presets):
+                    self.options.smart_day_preset = presets[preset_idx]
+            if hasattr(self.ui, 'smart_night_preset'):
+                presets = ["cozy_night", "cool_night", "dark_mode", "custom"]
+                preset_idx = self.ui.smart_night_preset.get_active()
+                if 0 <= preset_idx < len(presets):
+                    self.options.smart_night_preset = presets[preset_idx]
+
+            if hasattr(self.ui, 'smart_day_lightness'):
+                self.options.smart_day_lightness = max(0.0, min(1.0, self.ui.smart_day_lightness.get_value()))
+            if hasattr(self.ui, 'smart_day_temperature'):
+                self.options.smart_day_temperature = max(-1.0, min(1.0, self.ui.smart_day_temperature.get_value()))
+            if hasattr(self.ui, 'smart_day_saturation'):
+                self.options.smart_day_saturation = max(0.0, min(1.0, self.ui.smart_day_saturation.get_value()))
+            if hasattr(self.ui, 'smart_night_lightness'):
+                self.options.smart_night_lightness = max(0.0, min(1.0, self.ui.smart_night_lightness.get_value()))
+            if hasattr(self.ui, 'smart_night_temperature'):
+                self.options.smart_night_temperature = max(-1.0, min(1.0, self.ui.smart_night_temperature.get_value()))
+            if hasattr(self.ui, 'smart_night_saturation'):
+                self.options.smart_night_saturation = max(0.0, min(1.0, self.ui.smart_night_saturation.get_value()))
+            if hasattr(self.ui, 'smart_palette_tolerance'):
+                self.options.smart_palette_tolerance = max(0.1, min(0.5, self.ui.smart_palette_tolerance.get_value()))
+
             # Theming Engine settings
             if hasattr(self.ui, 'smart_theming_enabled'):
                 self.options.smart_theming_enabled = self.ui.smart_theming_enabled.get_active()
@@ -1477,6 +1654,251 @@ class PreferencesVarietyDialog(PreferencesDialog):
         """Update color similarity label."""
         self.update_smart_color_similarity_label()
 
+    # Time Adaptation handlers
+
+    def on_smart_time_adaptation_toggled(self, widget=None):
+        """Toggle visibility and sensitivity of time adaptation controls."""
+        enabled = self.ui.smart_time_adaptation.get_active()
+        if hasattr(self.ui, 'smart_time_container'):
+            self.ui.smart_time_container.set_sensitive(enabled)
+        # Update the current mode indicator
+        self.update_time_adaptation_status()
+
+    def on_smart_time_method_changed(self, widget=None):
+        """Show/hide conditional controls based on timing method selection."""
+        if self.loading:
+            return
+
+        method_idx = self.ui.smart_time_method.get_active()
+        methods = ["sunrise_sunset", "fixed", "system_theme"]
+        method = methods[method_idx] if 0 <= method_idx < len(methods) else "fixed"
+
+        # Show/hide controls based on method
+        if hasattr(self.ui, 'smart_time_location_box'):
+            self.ui.smart_time_location_box.set_visible(method == "sunrise_sunset")
+        if hasattr(self.ui, 'smart_time_sun_status'):
+            self.ui.smart_time_sun_status.set_visible(method == "sunrise_sunset")
+        if hasattr(self.ui, 'smart_time_fixed_box'):
+            self.ui.smart_time_fixed_box.set_visible(method == "fixed")
+        if hasattr(self.ui, 'smart_time_theme_status'):
+            self.ui.smart_time_theme_status.set_visible(method == "system_theme")
+
+        # Update status displays
+        self.update_time_adaptation_status()
+
+    def on_smart_day_preset_changed(self, widget=None):
+        """Handle day preset selection, show/hide custom sliders."""
+        if self.loading:
+            return
+
+        preset_id = self.ui.smart_day_preset.get_active_id()
+        show_custom = (preset_id == "custom")
+
+        if hasattr(self.ui, 'smart_day_custom_box'):
+            self.ui.smart_day_custom_box.set_visible(show_custom)
+
+    def on_smart_night_preset_changed(self, widget=None):
+        """Handle night preset selection, show/hide custom sliders."""
+        if self.loading:
+            return
+
+        preset_id = self.ui.smart_night_preset.get_active_id()
+        show_custom = (preset_id == "custom")
+
+        if hasattr(self.ui, 'smart_night_custom_box'):
+            self.ui.smart_night_custom_box.set_visible(show_custom)
+
+    def on_smart_location_lookup_clicked(self, widget=None):
+        """Geocode location name to lat/lon coordinates."""
+        location_name = self.ui.smart_location_name.get_text().strip()
+        if not location_name:
+            self.parent.show_notification(_("Please enter a location name"))
+            return
+
+        # Try to parse as coordinates first (lat,lon format)
+        import re
+        coord_match = re.match(r'^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$', location_name)
+        if coord_match:
+            try:
+                lat = float(coord_match.group(1))
+                lon = float(coord_match.group(2))
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    # Valid coordinates - store them and update display
+                    self._set_location_coordinates(lat, lon)
+                    self.update_time_adaptation_status()
+                    self.delayed_apply()
+                    return
+            except ValueError:
+                pass
+
+        # Try geocoding the location name
+        def do_geocode():
+            try:
+                # Use Nominatim for geocoding (free, no API key needed)
+                import urllib.request
+                import urllib.parse
+                import json
+
+                encoded_name = urllib.parse.quote(location_name)
+                url = f"https://nominatim.openstreetmap.org/search?q={encoded_name}&format=json&limit=1"
+
+                req = urllib.request.Request(
+                    url,
+                    headers={'User-Agent': 'Variety Wallpaper Manager'}
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+
+                if data:
+                    lat = float(data[0]['lat'])
+                    lon = float(data[0]['lon'])
+                    display_name = data[0].get('display_name', location_name)
+                    return lat, lon, display_name
+                else:
+                    return None, None, None
+            except Exception as e:
+                logger.warning(lambda: f"Geocoding failed: {e}")
+                return None, None, None
+
+        def on_geocode_done(result):
+            lat, lon, display_name = result
+            if lat is not None and lon is not None:
+                self._set_location_coordinates(lat, lon)
+                # Update the entry with the resolved name
+                if display_name and display_name != location_name:
+                    # Show a shorter version of the display name
+                    parts = display_name.split(', ')
+                    short_name = ', '.join(parts[:2]) if len(parts) > 2 else display_name
+                    self.ui.smart_location_name.set_text(short_name)
+                self.update_time_adaptation_status()
+                self.delayed_apply()
+            else:
+                self.parent.show_notification(
+                    _("Could not find location: {}").format(location_name)
+                )
+
+        # Run geocoding in background thread
+        import threading
+        def geocode_thread():
+            result = do_geocode()
+            GLib.idle_add(on_geocode_done, result)
+
+        thread = threading.Thread(target=geocode_thread, daemon=True)
+        thread.start()
+
+    def _set_location_coordinates(self, lat, lon):
+        """Store location coordinates for later use."""
+        # These will be saved to config when apply() is called
+        self._location_lat = lat
+        self._location_lon = lon
+
+    def update_time_adaptation_status(self):
+        """Update the 'Currently: Day/Night' indicator and sun times."""
+        try:
+            # Determine current period based on method
+            method_idx = self.ui.smart_time_method.get_active()
+            methods = ["sunrise_sunset", "fixed", "system_theme"]
+            method = methods[method_idx] if 0 <= method_idx < len(methods) else "fixed"
+
+            current_period = "day"  # Default
+            from datetime import datetime
+
+            if method == "fixed":
+                # Use fixed schedule times
+                day_start = self.ui.smart_day_start.get_text().strip()
+                night_start = self.ui.smart_night_start.get_text().strip()
+
+                try:
+                    now = datetime.now().strftime("%H:%M")
+                    if night_start <= now or now < day_start:
+                        current_period = "night"
+                    else:
+                        current_period = "day"
+                except Exception:
+                    pass
+
+            elif method == "sunrise_sunset":
+                # Try to calculate based on location
+                if hasattr(self, '_location_lat') and hasattr(self, '_location_lon'):
+                    try:
+                        from astral import LocationInfo
+                        from astral.sun import sun
+                        import datetime as dt
+
+                        location = LocationInfo(
+                            latitude=self._location_lat,
+                            longitude=self._location_lon
+                        )
+                        s = sun(location.observer, date=dt.date.today())
+                        sunrise = s['sunrise']
+                        sunset = s['sunset']
+
+                        # Update sun times display
+                        if hasattr(self.ui, 'smart_time_sun_status'):
+                            self.ui.smart_time_sun_status.set_text(
+                                _("Sunrise: {}  Sunset: {}").format(
+                                    sunrise.strftime("%H:%M"),
+                                    sunset.strftime("%H:%M")
+                                )
+                            )
+
+                        # Determine current period
+                        now = datetime.now()
+                        # Make sunrise/sunset timezone-aware or naive to match 'now'
+                        sunrise_naive = sunrise.replace(tzinfo=None)
+                        sunset_naive = sunset.replace(tzinfo=None)
+                        if sunrise_naive <= now <= sunset_naive:
+                            current_period = "day"
+                        else:
+                            current_period = "night"
+                    except ImportError:
+                        # astral not installed
+                        if hasattr(self.ui, 'smart_time_sun_status'):
+                            self.ui.smart_time_sun_status.set_text(
+                                _("Install 'astral' library for sun times")
+                            )
+                    except Exception as e:
+                        logger.debug(lambda: f"Sun calculation error: {e}")
+                else:
+                    if hasattr(self.ui, 'smart_time_sun_status'):
+                        self.ui.smart_time_sun_status.set_text(
+                            _("Enter location and click Lookup")
+                        )
+
+            elif method == "system_theme":
+                # Try to detect system theme
+                try:
+                    from gi.repository import Gio
+                    settings = Gio.Settings.new("org.gnome.desktop.interface")
+                    scheme = settings.get_string("color-scheme")
+                    if scheme == "prefer-dark":
+                        current_period = "night"
+                        theme_status = _("System theme: Dark")
+                    elif scheme == "prefer-light":
+                        current_period = "day"
+                        theme_status = _("System theme: Light")
+                    else:
+                        current_period = "day"
+                        theme_status = _("System theme: Default (Day)")
+
+                    if hasattr(self.ui, 'smart_time_theme_status'):
+                        self.ui.smart_time_theme_status.set_text(theme_status)
+                except Exception:
+                    if hasattr(self.ui, 'smart_time_theme_status'):
+                        self.ui.smart_time_theme_status.set_text(
+                            _("Could not detect system theme")
+                        )
+
+            # Update the current mode indicator
+            if hasattr(self.ui, 'smart_time_current_mode'):
+                if current_period == "night":
+                    self.ui.smart_time_current_mode.set_text(_("Night"))
+                else:
+                    self.ui.smart_time_current_mode.set_text(_("Day"))
+
+        except Exception:
+            logger.exception(lambda: "Error updating time adaptation status")
+
     def update_smart_image_cooldown_label(self):
         """Update the image cooldown label text."""
         value = int(self.ui.smart_image_cooldown.get_value())
@@ -1555,13 +1977,93 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
     def _hide_unimplemented_controls(self):
         """Hide controls for features not yet implemented."""
-        # Hide time adaptation (not implemented yet)
-        if hasattr(self.ui, 'smart_time_adaptation'):
-            self.ui.smart_time_adaptation.set_visible(False)
-        if hasattr(self.ui, 'smart_time_description'):
-            self.ui.smart_time_description.set_visible(False)
-        if hasattr(self.ui, 'smart_time_label'):
-            self.ui.smart_time_label.set_visible(False)
+        # Time adaptation controls are now implemented - no longer hiding them
+        pass
+
+    def _setup_smart_selection_tooltips(self):
+        """Apply tooltips to all Smart Selection controls."""
+        for widget_name, tooltip in SMART_SELECTION_TOOLTIPS.items():
+            widget = getattr(self.ui, widget_name, None)
+            if widget and hasattr(widget, 'set_tooltip_text'):
+                widget.set_tooltip_text(tooltip)
+
+    def _create_help_popover(self, help_key: str) -> Gtk.Popover:
+        """Create a help popover with the given content.
+
+        Args:
+            help_key: Key into SMART_SELECTION_HELP dictionary
+
+        Returns:
+            Gtk.Popover with formatted help text
+        """
+        popover = Gtk.Popover()
+
+        label = Gtk.Label()
+        label.set_text(SMART_SELECTION_HELP.get(help_key, ""))
+        label.set_line_wrap(True)
+        label.set_max_width_chars(50)
+        label.set_margin_start(12)
+        label.set_margin_end(12)
+        label.set_margin_top(12)
+        label.set_margin_bottom(12)
+        label.set_xalign(0)  # Left-align text
+
+        popover.add(label)
+        label.show()
+
+        return popover
+
+    def on_smart_help_overview_clicked(self, widget):
+        """Show overview help popover."""
+        popover = self._create_help_popover("overview")
+        popover.set_relative_to(widget)
+        popover.popup()
+
+    def on_smart_help_time_adaptation_clicked(self, widget):
+        """Show time adaptation help popover."""
+        popover = self._create_help_popover("time_adaptation")
+        popover.set_relative_to(widget)
+        popover.popup()
+
+    def on_smart_help_color_matching_clicked(self, widget):
+        """Show color matching help popover."""
+        popover = self._create_help_popover("color_matching")
+        popover.set_relative_to(widget)
+        popover.popup()
+
+    def on_smart_help_presets_clicked(self, widget):
+        """Show presets help popover."""
+        popover = self._create_help_popover("presets")
+        popover.set_relative_to(widget)
+        popover.popup()
+
+    def on_smart_help_decay_types_clicked(self, widget):
+        """Show decay types help popover."""
+        popover = self._create_help_popover("decay_types")
+        popover.set_relative_to(widget)
+        popover.popup()
+
+    def on_smart_help_theming_clicked(self, widget):
+        """Show theming help popover."""
+        popover = self._create_help_popover("theming")
+        popover.set_relative_to(widget)
+        popover.popup()
+
+    def _connect_help_buttons(self):
+        """Connect help buttons to their popover handlers if they exist in the UI."""
+        help_button_handlers = {
+            "smart_help_overview": self.on_smart_help_overview_clicked,
+            "smart_help_time_adaptation": self.on_smart_help_time_adaptation_clicked,
+            "smart_help_color_matching": self.on_smart_help_color_matching_clicked,
+            "smart_help_presets": self.on_smart_help_presets_clicked,
+            "smart_help_decay_types": self.on_smart_help_decay_types_clicked,
+            "smart_help_theming": self.on_smart_help_theming_clicked,
+        }
+
+        for widget_name, handler in help_button_handlers.items():
+            widget = getattr(self.ui, widget_name, None)
+            if widget and hasattr(widget, 'connect'):
+                widget.connect("clicked", handler)
 
     def _build_insights_section(self):
         """Build the Collection Insights section with expandable cards."""

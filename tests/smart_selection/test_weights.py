@@ -425,6 +425,321 @@ class TestMinimumWeightFloor(unittest.TestCase):
         self.assertGreater(weight, 0)
 
 
+class TestCalculateTimeAffinity(unittest.TestCase):
+    """Tests for calculate_time_affinity calculation."""
+
+    def test_import_calculate_time_affinity(self):
+        """calculate_time_affinity can be imported from weights module."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        self.assertIsNotNone(calculate_time_affinity)
+
+    def test_returns_neutral_without_palette(self):
+        """Returns 1.0 when image_palette is None."""
+        from variety.smart_selection.weights import calculate_time_affinity
+
+        affinity = calculate_time_affinity(
+            image_palette=None,
+            target_lightness=0.5,
+            target_temperature=0.0,
+            target_saturation=0.5,
+        )
+        self.assertEqual(affinity, 1.0)
+
+    def test_returns_boost_for_perfect_match(self):
+        """Returns 1.5 for perfect palette match."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.6,
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+
+        affinity = calculate_time_affinity(
+            image_palette=palette,
+            target_lightness=0.6,
+            target_temperature=0.0,
+            target_saturation=0.5,
+        )
+        self.assertEqual(affinity, 1.5)
+
+    def test_returns_penalty_for_poor_match(self):
+        """Returns 0.5 for poor palette match beyond tolerance."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        # Bright, warm palette
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.9,
+            color_temperature=0.8,
+            avg_saturation=0.8,
+        )
+
+        # Target is dark, cool
+        affinity = calculate_time_affinity(
+            image_palette=palette,
+            target_lightness=0.2,
+            target_temperature=-0.5,
+            target_saturation=0.3,
+            tolerance=0.3,
+        )
+        self.assertEqual(affinity, 0.5)
+
+    def test_returns_intermediate_for_partial_match(self):
+        """Returns intermediate value for partial match."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.5,
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+
+        # Slightly different target
+        affinity = calculate_time_affinity(
+            image_palette=palette,
+            target_lightness=0.6,  # +0.1 difference
+            target_temperature=0.0,
+            target_saturation=0.5,
+            tolerance=0.3,
+        )
+        # Should be between 0.5 and 1.5
+        self.assertGreater(affinity, 0.5)
+        self.assertLess(affinity, 1.5)
+
+    def test_lightness_weighted_more_heavily(self):
+        """Lightness differences have more impact than other dimensions."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        target_l, target_t, target_s = 0.5, 0.0, 0.5
+
+        # Palette with lightness difference
+        palette_lightness_diff = PaletteRecord(
+            filepath='/test/img1.jpg',
+            avg_lightness=0.7,  # +0.2 difference
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+
+        # Palette with temperature difference (same magnitude)
+        palette_temp_diff = PaletteRecord(
+            filepath='/test/img2.jpg',
+            avg_lightness=0.5,
+            color_temperature=0.2,  # +0.2 difference
+            avg_saturation=0.5,
+        )
+
+        affinity_lightness = calculate_time_affinity(
+            palette_lightness_diff, target_l, target_t, target_s
+        )
+        affinity_temp = calculate_time_affinity(
+            palette_temp_diff, target_l, target_t, target_s
+        )
+
+        # Lightness diff should have more impact (lower affinity)
+        self.assertLess(affinity_lightness, affinity_temp)
+
+    def test_tolerance_affects_sensitivity(self):
+        """Lower tolerance means stricter matching."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.6,
+            color_temperature=0.1,
+            avg_saturation=0.4,
+        )
+
+        # Same target, different tolerances
+        affinity_loose = calculate_time_affinity(
+            image_palette=palette,
+            target_lightness=0.5,
+            target_temperature=0.0,
+            target_saturation=0.5,
+            tolerance=0.5,  # Loose
+        )
+
+        affinity_strict = calculate_time_affinity(
+            image_palette=palette,
+            target_lightness=0.5,
+            target_temperature=0.0,
+            target_saturation=0.5,
+            tolerance=0.1,  # Strict
+        )
+
+        # Loose tolerance should give higher affinity for same difference
+        self.assertGreater(affinity_loose, affinity_strict)
+
+    def test_clamped_to_valid_range(self):
+        """Affinity is always between 0.5 and 1.5."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        # Test extreme match
+        perfect_palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.5,
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+        affinity_perfect = calculate_time_affinity(
+            perfect_palette, 0.5, 0.0, 0.5
+        )
+        self.assertLessEqual(affinity_perfect, 1.5)
+        self.assertGreaterEqual(affinity_perfect, 0.5)
+
+        # Test extreme mismatch
+        opposite_palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=1.0,
+            color_temperature=1.0,
+            avg_saturation=1.0,
+        )
+        affinity_opposite = calculate_time_affinity(
+            opposite_palette, 0.0, -1.0, 0.0
+        )
+        self.assertLessEqual(affinity_opposite, 1.5)
+        self.assertGreaterEqual(affinity_opposite, 0.5)
+
+    def test_handles_none_palette_metrics(self):
+        """Handles palette with None values by using neutral defaults."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        # Palette with no metrics (all None)
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=None,
+            color_temperature=None,
+            avg_saturation=None,
+        )
+
+        # Should not raise an error
+        affinity = calculate_time_affinity(
+            image_palette=palette,
+            target_lightness=0.5,
+            target_temperature=0.0,
+            target_saturation=0.5,
+        )
+        # Should return a valid value based on neutral defaults
+        self.assertGreaterEqual(affinity, 0.5)
+        self.assertLessEqual(affinity, 1.5)
+
+
+class TestTimeAffinityInCalculateWeight(unittest.TestCase):
+    """Tests for time affinity integration in calculate_weight."""
+
+    def test_calculate_weight_with_time_targets(self):
+        """calculate_weight applies time affinity when targets provided."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(time_adaptation_enabled=True)
+        image = ImageRecord(filepath='/test/img.jpg', filename='img.jpg', times_shown=0)
+
+        # Matching palette
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.6,
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+
+        # Weight with time targets matching the palette
+        w_matching = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette,
+            time_target_lightness=0.6,
+            time_target_temperature=0.0,
+            time_target_saturation=0.5,
+        )
+
+        # Weight with time targets not matching
+        w_not_matching = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette,
+            time_target_lightness=0.2,
+            time_target_temperature=-0.5,
+            time_target_saturation=0.3,
+        )
+
+        self.assertGreater(w_matching, w_not_matching)
+
+    def test_calculate_weight_no_time_targets_neutral(self):
+        """calculate_weight returns neutral when time targets not provided."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(time_adaptation_enabled=True)
+        image = ImageRecord(filepath='/test/img.jpg', filename='img.jpg', times_shown=0)
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.9,  # Extreme value
+            color_temperature=0.8,
+            avg_saturation=0.8,
+        )
+
+        # Without time targets
+        w_no_targets = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette,
+        )
+
+        # With time targets = None (some None)
+        w_partial_targets = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette,
+            time_target_lightness=0.5,
+            time_target_temperature=None,  # Missing one
+            time_target_saturation=0.5,
+        )
+
+        # Both should be equal (no time affinity applied)
+        self.assertEqual(w_no_targets, w_partial_targets)
+
+    def test_calculate_weight_time_adaptation_disabled(self):
+        """calculate_weight ignores time targets when adaptation disabled."""
+        from variety.smart_selection.weights import calculate_weight
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(time_adaptation_enabled=False)
+        image = ImageRecord(filepath='/test/img.jpg', filename='img.jpg', times_shown=0)
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.9,
+            color_temperature=0.8,
+            avg_saturation=0.8,
+        )
+
+        # With mismatched targets (but adaptation disabled)
+        w_with_targets = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette,
+            time_target_lightness=0.2,
+            time_target_temperature=-0.5,
+            time_target_saturation=0.3,
+        )
+
+        # Without targets
+        w_without_targets = calculate_weight(
+            image, source_last_shown_at=None, config=config,
+            image_palette=palette,
+        )
+
+        # Should be equal (time affinity not applied when disabled)
+        self.assertEqual(w_with_targets, w_without_targets)
+
+
 class TestColorAffinityFactor(unittest.TestCase):
     """Tests for color_affinity_factor calculation."""
 

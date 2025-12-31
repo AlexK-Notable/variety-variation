@@ -112,6 +112,59 @@ def new_image_boost(times_shown: int, boost_value: float) -> float:
     return boost_value if times_shown == 0 else 1.0
 
 
+def calculate_time_affinity(
+    image_palette: Optional[PaletteRecord],
+    target_lightness: float,
+    target_temperature: float,
+    target_saturation: float,
+    tolerance: float = 0.3,
+) -> float:
+    """Calculate affinity between image palette and time-based target.
+
+    This function computes a weight multiplier based on how well an image's
+    color characteristics match the target values for the current time period.
+    Lightness is weighted most heavily since it matters most for day/night.
+
+    Args:
+        image_palette: PaletteRecord for the image, or None if unknown.
+        target_lightness: Target lightness value (0.0-1.0).
+        target_temperature: Target temperature value (-1.0 to +1.0).
+        target_saturation: Target saturation value (0.0-1.0).
+        tolerance: How strictly to match (0.1-0.5). Lower = stricter.
+
+    Returns:
+        Multiplier from 0.5 (poor match) to 1.5 (excellent match).
+        Returns 1.0 (neutral) if no palette data is available.
+    """
+    # No palette data - return neutral (don't penalize unindexed images)
+    if not image_palette:
+        return 1.0
+
+    # Get image palette metrics, defaulting to neutral values
+    img_lightness = image_palette.avg_lightness if image_palette.avg_lightness is not None else 0.5
+    img_temperature = image_palette.color_temperature if image_palette.color_temperature is not None else 0.0
+    img_saturation = image_palette.avg_saturation if image_palette.avg_saturation is not None else 0.5
+
+    # Calculate distance in each dimension
+    lightness_diff = abs(img_lightness - target_lightness)
+    temp_diff = abs(img_temperature - target_temperature)
+    sat_diff = abs(img_saturation - target_saturation)
+
+    # Weighted average: lightness matters most for day/night distinction
+    # Lightness: 50%, Temperature: 30%, Saturation: 20%
+    distance = (lightness_diff * 0.5) + (temp_diff * 0.3) + (sat_diff * 0.2)
+
+    # Convert distance to affinity score using tolerance
+    # distance=0 -> 1.5 (perfect match, boost)
+    # distance>=tolerance -> 0.5 (poor match, penalty)
+    if distance >= tolerance:
+        return 0.5
+
+    # Linear interpolation: 1.5 at distance=0, 0.5 at distance=tolerance
+    affinity = 1.5 - (distance / tolerance)
+    return max(0.5, min(1.5, affinity))
+
+
 def color_affinity_factor(
     image_palette: Optional[PaletteRecord],
     target_palette: Optional[Dict[str, Any]],
@@ -193,11 +246,14 @@ def calculate_weight(
     image_palette: Optional[PaletteRecord] = None,
     target_palette: Optional[Dict[str, Any]] = None,
     constraints: Optional[SelectionConstraints] = None,
+    time_target_lightness: Optional[float] = None,
+    time_target_temperature: Optional[float] = None,
+    time_target_saturation: Optional[float] = None,
 ) -> float:
     """Calculate combined selection weight for an image.
 
     Weight formula:
-        weight = recency * source_recency * favorite_boost * new_boost * color_affinity
+        weight = recency * source_recency * favorite_boost * new_boost * color_affinity * time_affinity
 
     All factors are multiplicative, so a low score in any area
     significantly reduces the overall weight.
@@ -209,6 +265,10 @@ def calculate_weight(
         image_palette: Optional PaletteRecord for color affinity calculation.
         target_palette: Optional target palette dict for color matching.
         constraints: Optional SelectionConstraints with color settings.
+        time_target_lightness: Target lightness for time-based selection (0.0-1.0).
+            If None, time affinity is not applied.
+        time_target_temperature: Target temperature for time-based selection (-1.0 to +1.0).
+        time_target_saturation: Target saturation for time-based selection (0.0-1.0).
 
     Returns:
         Combined weight (higher = more likely to be selected).
@@ -234,6 +294,20 @@ def calculate_weight(
     new_boost = new_image_boost(image.times_shown, config.new_image_boost)
     color_affinity = color_affinity_factor(image_palette, target_palette, config, constraints)
 
+    # Calculate time affinity if time adaptation is enabled and targets are provided
+    time_affinity = 1.0
+    if (config.time_adaptation_enabled and
+        time_target_lightness is not None and
+        time_target_temperature is not None and
+        time_target_saturation is not None):
+        time_affinity = calculate_time_affinity(
+            image_palette,
+            time_target_lightness,
+            time_target_temperature,
+            time_target_saturation,
+            config.palette_tolerance,
+        )
+
     # Combine multiplicatively with minimum floor to prevent zero collapse
-    weight = recency * source * fav_boost * new_boost * color_affinity
+    weight = recency * source * fav_boost * new_boost * color_affinity * time_affinity
     return max(weight, 1e-6)

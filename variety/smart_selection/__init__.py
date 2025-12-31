@@ -20,6 +20,7 @@ from variety.smart_selection.weights import (
     favorite_boost,
     new_image_boost,
     color_affinity_factor,
+    calculate_time_affinity,
     calculate_weight,
 )
 from variety.smart_selection.palette import (
@@ -40,6 +41,15 @@ from variety.smart_selection.color_science import (
     get_oklab_lightness,
     get_oklab_chroma,
     get_oklab_hue,
+)
+from variety.smart_selection.time_adapter import (
+    PaletteTarget,
+    PALETTE_PRESETS,
+    TimeAdapter,
+    parse_time_string,
+    get_system_theme_preference,
+    get_sun_times,
+    ASTRAL_AVAILABLE,
 )
 
 __all__ = [
@@ -65,6 +75,7 @@ __all__ = [
     'favorite_boost',
     'new_image_boost',
     'color_affinity_factor',
+    'calculate_time_affinity',
     'calculate_weight',
     # Palette functions
     'hex_to_hsl',
@@ -83,4 +94,12 @@ __all__ = [
     'get_oklab_lightness',
     'get_oklab_chroma',
     'get_oklab_hue',
+    # Time adaptation
+    'PaletteTarget',
+    'PALETTE_PRESETS',
+    'TimeAdapter',
+    'parse_time_string',
+    'get_system_theme_preference',
+    'get_sun_times',
+    'ASTRAL_AVAILABLE',
 ]

@@ -6,16 +6,20 @@ with O(log n) binary search for efficiency.
 """
 
 import bisect
+import logging
 import random
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from variety.smart_selection.weights import calculate_weight
+from variety.smart_selection.time_adapter import TimeAdapter, PaletteTarget
 
 if TYPE_CHECKING:
     from variety.smart_selection.database import ImageDatabase
     from variety.smart_selection.models import ImageRecord, SelectionConstraints, PaletteRecord
     from variety.smart_selection.config import SelectionConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,6 +52,15 @@ class SelectionEngine:
         """
         self.db = db
         self.config = config
+        self._time_adapter: Optional[TimeAdapter] = None
+
+        # Initialize time adapter if time adaptation is enabled
+        if config.time_adaptation_enabled:
+            try:
+                self._time_adapter = TimeAdapter(config)
+                logger.debug("TimeAdapter initialized for time-based selection")
+            except Exception as e:
+                logger.warning(f"Failed to initialize TimeAdapter: {e}")
 
     def select(
         self,
@@ -80,9 +93,13 @@ class SelectionEngine:
         source_ids = list(set(img.source_id for img in candidates if img.source_id))
         sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
 
-        # Batch-load palettes if color constraints are active
+        # Batch-load palettes if color constraints or time adaptation is active
         palettes: Dict[str, 'PaletteRecord'] = {}
-        if target_palette and self.config.color_match_weight:
+        needs_palettes = (
+            (target_palette and self.config.color_match_weight) or
+            (self._time_adapter and self.config.time_adaptation_enabled)
+        )
+        if needs_palettes:
             filepaths = [img.filepath for img in candidates]
             palettes = self.db.get_palettes_by_filepaths(filepaths)
 
@@ -114,6 +131,19 @@ class SelectionEngine:
         Returns:
             List of weights corresponding to candidates.
         """
+        # Get time-based palette target if time adaptation is enabled
+        time_target: Optional[PaletteTarget] = None
+        if self._time_adapter and self.config.time_adaptation_enabled:
+            try:
+                time_target = self._time_adapter.get_palette_target()
+                period = self._time_adapter.get_current_period()
+                logger.debug(f"Time adaptation active: period={period}, "
+                           f"target L={time_target.lightness:.2f}, "
+                           f"T={time_target.temperature:.2f}, "
+                           f"S={time_target.saturation:.2f}")
+            except Exception as e:
+                logger.warning(f"Failed to get time target: {e}")
+
         weights = []
         for img in candidates:
             source_last_shown = None
@@ -128,6 +158,9 @@ class SelectionEngine:
                 image_palette=image_palette,
                 target_palette=target_palette,
                 constraints=constraints,
+                time_target_lightness=time_target.lightness if time_target else None,
+                time_target_temperature=time_target.temperature if time_target else None,
+                time_target_saturation=time_target.saturation if time_target else None,
             )
             weights.append(weight)
 

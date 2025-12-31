@@ -6,7 +6,7 @@ recency penalties, weight multipliers, and decay functions.
 """
 
 from dataclasses import dataclass, field, fields as dataclass_fields, asdict
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 @dataclass
@@ -31,6 +31,40 @@ class SelectionConfig:
         use_oklab_similarity: Use perceptually uniform OKLAB color space for
             color similarity calculations. OKLAB provides more accurate
             perceptual matching than HSL. Default: True.
+
+        # Time adaptation settings
+        time_adaptation_enabled: Whether to adjust palette preferences based
+            on time of day. Default: True.
+        time_adaptation_method: How to determine day vs night.
+            Options: 'sunrise_sunset', 'fixed', 'system_theme'. Default: 'fixed'.
+        day_start_time: Time when day period begins (HH:MM format).
+            Only used with 'fixed' method. Default: '07:00'.
+        night_start_time: Time when night period begins (HH:MM format).
+            Only used with 'fixed' method. Default: '19:00'.
+        location_lat: Latitude for sunrise/sunset calculation.
+            Only used with 'sunrise_sunset' method.
+        location_lon: Longitude for sunrise/sunset calculation.
+            Only used with 'sunrise_sunset' method.
+        location_name: Human-readable location name for display.
+        day_preset: Palette preset for day period.
+            Options: 'bright_day', 'neutral_day', 'custom'. Default: 'neutral_day'.
+        night_preset: Palette preset for night period.
+            Options: 'cozy_night', 'cool_night', 'dark_mode', 'custom'.
+            Default: 'cozy_night'.
+        day_lightness: Target lightness for day (0.0-1.0).
+            Only used when day_preset is 'custom'. Default: 0.6.
+        day_temperature: Target temperature for day (-1.0 to +1.0).
+            Only used when day_preset is 'custom'. Default: 0.0.
+        day_saturation: Target saturation for day (0.0-1.0).
+            Only used when day_preset is 'custom'. Default: 0.5.
+        night_lightness: Target lightness for night (0.0-1.0).
+            Only used when night_preset is 'custom'. Default: 0.3.
+        night_temperature: Target temperature for night (-1.0 to +1.0).
+            Only used when night_preset is 'custom'. Default: 0.4.
+        night_saturation: Target saturation for night (0.0-1.0).
+            Only used when night_preset is 'custom'. Default: 0.4.
+        palette_tolerance: How strictly to match palette targets (0.1-0.5).
+            Lower = stricter matching with less variety. Default: 0.3.
     """
     image_cooldown_days: float = 7.0
     source_cooldown_days: float = 1.0
@@ -40,6 +74,24 @@ class SelectionConfig:
     recency_decay: str = 'exponential'
     enabled: bool = True
     use_oklab_similarity: bool = True
+
+    # Time adaptation settings
+    time_adaptation_enabled: bool = True
+    time_adaptation_method: str = 'fixed'  # 'sunrise_sunset', 'fixed', 'system_theme'
+    day_start_time: str = '07:00'
+    night_start_time: str = '19:00'
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
+    location_name: str = ''
+    day_preset: str = 'neutral_day'
+    night_preset: str = 'cozy_night'
+    day_lightness: float = 0.6
+    day_temperature: float = 0.0
+    day_saturation: float = 0.5
+    night_lightness: float = 0.3
+    night_temperature: float = 0.4
+    night_saturation: float = 0.4
+    palette_tolerance: float = 0.3
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to a dictionary.

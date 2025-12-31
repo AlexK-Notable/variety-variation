@@ -359,6 +359,101 @@ class Options:
             except Exception:
                 pass
 
+            # Time adaptation settings (new)
+            try:
+                time_method = config["smart_time_method"].lower().strip()
+                if time_method in ("sunrise_sunset", "fixed", "system_theme"):
+                    self.smart_time_method = time_method
+            except Exception:
+                pass
+
+            try:
+                self.smart_day_start = config["smart_day_start"].strip()
+            except Exception:
+                pass
+
+            try:
+                self.smart_night_start = config["smart_night_start"].strip()
+            except Exception:
+                pass
+
+            try:
+                lat_str = config["smart_location_lat"].strip()
+                if lat_str and lat_str.lower() != "none":
+                    self.smart_location_lat = float(lat_str)
+                    self.smart_location_lat = max(-90.0, min(90.0, self.smart_location_lat))
+            except Exception:
+                pass
+
+            try:
+                lon_str = config["smart_location_lon"].strip()
+                if lon_str and lon_str.lower() != "none":
+                    self.smart_location_lon = float(lon_str)
+                    self.smart_location_lon = max(-180.0, min(180.0, self.smart_location_lon))
+            except Exception:
+                pass
+
+            try:
+                self.smart_location_name = config["smart_location_name"].strip()
+            except Exception:
+                pass
+
+            try:
+                day_preset = config["smart_day_preset"].lower().strip()
+                if day_preset in ("bright_day", "neutral_day", "custom"):
+                    self.smart_day_preset = day_preset
+            except Exception:
+                pass
+
+            try:
+                night_preset = config["smart_night_preset"].lower().strip()
+                if night_preset in ("cozy_night", "cool_night", "dark_mode", "custom"):
+                    self.smart_night_preset = night_preset
+            except Exception:
+                pass
+
+            try:
+                self.smart_day_lightness = float(config["smart_day_lightness"])
+                self.smart_day_lightness = max(0.0, min(1.0, self.smart_day_lightness))
+            except Exception:
+                pass
+
+            try:
+                self.smart_day_temperature = float(config["smart_day_temperature"])
+                self.smart_day_temperature = max(-1.0, min(1.0, self.smart_day_temperature))
+            except Exception:
+                pass
+
+            try:
+                self.smart_day_saturation = float(config["smart_day_saturation"])
+                self.smart_day_saturation = max(0.0, min(1.0, self.smart_day_saturation))
+            except Exception:
+                pass
+
+            try:
+                self.smart_night_lightness = float(config["smart_night_lightness"])
+                self.smart_night_lightness = max(0.0, min(1.0, self.smart_night_lightness))
+            except Exception:
+                pass
+
+            try:
+                self.smart_night_temperature = float(config["smart_night_temperature"])
+                self.smart_night_temperature = max(-1.0, min(1.0, self.smart_night_temperature))
+            except Exception:
+                pass
+
+            try:
+                self.smart_night_saturation = float(config["smart_night_saturation"])
+                self.smart_night_saturation = max(0.0, min(1.0, self.smart_night_saturation))
+            except Exception:
+                pass
+
+            try:
+                self.smart_palette_tolerance = float(config["smart_palette_tolerance"])
+                self.smart_palette_tolerance = max(0.1, min(0.5, self.smart_palette_tolerance))
+            except Exception:
+                pass
+
             try:
                 self.copyto_enabled = config["copyto_enabled"].lower() in TRUTH_VALUES
             except Exception:
@@ -765,6 +860,23 @@ class Options:
         self.smart_time_adaptation = True
         self.smart_theming_enabled = True
 
+        # Time adaptation settings (new)
+        self.smart_time_method = "fixed"  # "sunrise_sunset", "fixed", "system_theme"
+        self.smart_day_start = "07:00"
+        self.smart_night_start = "19:00"
+        self.smart_location_lat = None
+        self.smart_location_lon = None
+        self.smart_location_name = ""
+        self.smart_day_preset = "neutral_day"
+        self.smart_night_preset = "cozy_night"
+        self.smart_day_lightness = 0.6
+        self.smart_day_temperature = 0.0
+        self.smart_day_saturation = 0.5
+        self.smart_night_lightness = 0.3
+        self.smart_night_temperature = 0.4
+        self.smart_night_saturation = 0.4
+        self.smart_palette_tolerance = 0.3
+
         self.copyto_enabled = False
         self.copyto_folder = "Default"
 
@@ -898,6 +1010,23 @@ class Options:
             config["smart_color_similarity"] = str(self.smart_color_similarity)
             config["smart_time_adaptation"] = str(self.smart_time_adaptation)
             config["smart_theming_enabled"] = str(self.smart_theming_enabled)
+
+            # Time adaptation settings (new)
+            config["smart_time_method"] = self.smart_time_method
+            config["smart_day_start"] = self.smart_day_start
+            config["smart_night_start"] = self.smart_night_start
+            config["smart_location_lat"] = str(self.smart_location_lat) if self.smart_location_lat is not None else ""
+            config["smart_location_lon"] = str(self.smart_location_lon) if self.smart_location_lon is not None else ""
+            config["smart_location_name"] = self.smart_location_name
+            config["smart_day_preset"] = self.smart_day_preset
+            config["smart_night_preset"] = self.smart_night_preset
+            config["smart_day_lightness"] = str(self.smart_day_lightness)
+            config["smart_day_temperature"] = str(self.smart_day_temperature)
+            config["smart_day_saturation"] = str(self.smart_day_saturation)
+            config["smart_night_lightness"] = str(self.smart_night_lightness)
+            config["smart_night_temperature"] = str(self.smart_night_temperature)
+            config["smart_night_saturation"] = str(self.smart_night_saturation)
+            config["smart_palette_tolerance"] = str(self.smart_palette_tolerance)
 
             config["copyto_enabled"] = str(self.copyto_enabled)
             config["copyto_folder"] = Util.collapseuser(self.copyto_folder)

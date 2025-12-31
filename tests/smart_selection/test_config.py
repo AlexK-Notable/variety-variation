@@ -110,6 +110,142 @@ class TestSelectionConfig(unittest.TestCase):
             self.assertEqual(config.recency_decay, decay)
 
 
+class TestTimeAdaptationConfig(unittest.TestCase):
+    """Tests for time adaptation configuration fields."""
+
+    def test_time_adaptation_fields_exist(self):
+        """SelectionConfig has all time adaptation fields."""
+        from variety.smart_selection.config import SelectionConfig
+
+        field_names = {f.name for f in fields(SelectionConfig)}
+        time_fields = {
+            'time_adaptation_enabled',
+            'time_adaptation_method',
+            'day_start_time',
+            'night_start_time',
+            'location_lat',
+            'location_lon',
+            'location_name',
+            'day_preset',
+            'night_preset',
+            'day_lightness',
+            'day_temperature',
+            'day_saturation',
+            'night_lightness',
+            'night_temperature',
+            'night_saturation',
+            'palette_tolerance',
+        }
+        self.assertTrue(time_fields.issubset(field_names))
+
+    def test_time_adaptation_default_values(self):
+        """Time adaptation fields have correct defaults."""
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig()
+
+        # Enabled by default
+        self.assertTrue(config.time_adaptation_enabled)
+
+        # Fixed schedule by default
+        self.assertEqual(config.time_adaptation_method, 'fixed')
+        self.assertEqual(config.day_start_time, '07:00')
+        self.assertEqual(config.night_start_time, '19:00')
+
+        # Location unset by default
+        self.assertIsNone(config.location_lat)
+        self.assertIsNone(config.location_lon)
+        self.assertEqual(config.location_name, '')
+
+        # Default presets
+        self.assertEqual(config.day_preset, 'neutral_day')
+        self.assertEqual(config.night_preset, 'cozy_night')
+
+        # Default day palette values
+        self.assertEqual(config.day_lightness, 0.6)
+        self.assertEqual(config.day_temperature, 0.0)
+        self.assertEqual(config.day_saturation, 0.5)
+
+        # Default night palette values
+        self.assertEqual(config.night_lightness, 0.3)
+        self.assertEqual(config.night_temperature, 0.4)
+        self.assertEqual(config.night_saturation, 0.4)
+
+        # Default tolerance
+        self.assertEqual(config.palette_tolerance, 0.3)
+
+    def test_time_adaptation_custom_values(self):
+        """Time adaptation fields can be set to custom values."""
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(
+            time_adaptation_enabled=False,
+            time_adaptation_method='sunrise_sunset',
+            day_start_time='06:30',
+            night_start_time='20:00',
+            location_lat=40.7128,
+            location_lon=-74.0060,
+            location_name='New York',
+            day_preset='bright_day',
+            night_preset='dark_mode',
+            day_lightness=0.7,
+            day_temperature=0.3,
+            day_saturation=0.6,
+            night_lightness=0.2,
+            night_temperature=-0.3,
+            night_saturation=0.3,
+            palette_tolerance=0.2,
+        )
+
+        self.assertFalse(config.time_adaptation_enabled)
+        self.assertEqual(config.time_adaptation_method, 'sunrise_sunset')
+        self.assertEqual(config.day_start_time, '06:30')
+        self.assertEqual(config.night_start_time, '20:00')
+        self.assertEqual(config.location_lat, 40.7128)
+        self.assertEqual(config.location_lon, -74.0060)
+        self.assertEqual(config.location_name, 'New York')
+        self.assertEqual(config.day_preset, 'bright_day')
+        self.assertEqual(config.night_preset, 'dark_mode')
+        self.assertEqual(config.day_lightness, 0.7)
+        self.assertEqual(config.day_temperature, 0.3)
+        self.assertEqual(config.day_saturation, 0.6)
+        self.assertEqual(config.night_lightness, 0.2)
+        self.assertEqual(config.night_temperature, -0.3)
+        self.assertEqual(config.night_saturation, 0.3)
+        self.assertEqual(config.palette_tolerance, 0.2)
+
+    def test_time_adaptation_method_options(self):
+        """time_adaptation_method accepts valid options."""
+        from variety.smart_selection.config import SelectionConfig
+
+        for method in ['sunrise_sunset', 'fixed', 'system_theme']:
+            config = SelectionConfig(time_adaptation_method=method)
+            self.assertEqual(config.time_adaptation_method, method)
+
+    def test_time_adaptation_serialization(self):
+        """Time adaptation fields serialize to/from dict correctly."""
+        from variety.smart_selection.config import SelectionConfig
+
+        original = SelectionConfig(
+            time_adaptation_enabled=True,
+            time_adaptation_method='sunrise_sunset',
+            location_lat=51.5074,
+            location_lon=-0.1278,
+            day_preset='custom',
+            day_lightness=0.65,
+        )
+
+        config_dict = original.to_dict()
+        restored = SelectionConfig.from_dict(config_dict)
+
+        self.assertEqual(restored.time_adaptation_enabled, original.time_adaptation_enabled)
+        self.assertEqual(restored.time_adaptation_method, original.time_adaptation_method)
+        self.assertEqual(restored.location_lat, original.location_lat)
+        self.assertEqual(restored.location_lon, original.location_lon)
+        self.assertEqual(restored.day_preset, original.day_preset)
+        self.assertEqual(restored.day_lightness, original.day_lightness)
+
+
 class TestConfigSerialization(unittest.TestCase):
     """Tests for config serialization to/from dict."""
 
