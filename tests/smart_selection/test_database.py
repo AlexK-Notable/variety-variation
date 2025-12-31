@@ -1030,6 +1030,15 @@ class TestBatchSourceLoading(unittest.TestCase):
 
         db.close()
 
+    def test_get_sources_by_ids_empty(self):
+        """Verify empty input returns empty dict."""
+        from variety.smart_selection.database import ImageDatabase
+
+        db = ImageDatabase(self.db_path)
+        result = db.get_sources_by_ids([])
+        self.assertEqual(result, {})
+        db.close()
+
 
 class TestBatchDeleteImages(unittest.TestCase):
     """Tests for batch_delete_images functionality."""
@@ -1151,6 +1160,38 @@ class TestBatchPaletteLoading(unittest.TestCase):
         self.assertIn("/test/image1.jpg", result)
         self.assertIn("/test/image2.jpg", result)
         self.assertNotIn("/test/image3.jpg", result)
+
+        db.close()
+
+    def test_get_palettes_by_filepaths_empty(self):
+        """Verify empty input returns empty dict."""
+        from variety.smart_selection.database import ImageDatabase
+
+        db = ImageDatabase(self.db_path)
+        result = db.get_palettes_by_filepaths([])
+        self.assertEqual(result, {})
+        db.close()
+
+    def test_get_palettes_by_filepaths_chunking(self):
+        """Verify large input is chunked correctly (SQLite 999 param limit)."""
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import ImageRecord, PaletteRecord
+
+        db = ImageDatabase(self.db_path)
+
+        # Create 600 images with palettes (tests chunking at 500)
+        for i in range(600):
+            filepath = f"/test/image{i}.jpg"
+            image = ImageRecord(filepath=filepath, filename=f"image{i}.jpg", source_id="test")
+            db.upsert_image(image)
+            palette = PaletteRecord(filepath=filepath, color0="#ffffff")
+            db.upsert_palette(palette)
+
+        # Fetch all
+        filepaths = [f"/test/image{i}.jpg" for i in range(600)]
+        result = db.get_palettes_by_filepaths(filepaths)
+
+        self.assertEqual(len(result), 600)
 
         db.close()
 

@@ -217,6 +217,12 @@ class SmartSelector:
         if not constraints:
             return candidates
 
+        # Batch-load palettes if color filtering is active to avoid N+1 queries
+        palettes = {}
+        if constraints.target_palette:
+            filepaths = [img.filepath for img in candidates]
+            palettes = self.db.get_palettes_by_filepaths(filepaths)
+
         # Apply constraint filters
         filtered = []
         for img in candidates:
@@ -245,8 +251,8 @@ class SmartSelector:
 
             # Color similarity filter
             if constraints.target_palette:
-                # Get image's palette
-                palette_record = self.db.get_palette(img.filepath)
+                # Get image's palette from batch-loaded dict
+                palette_record = palettes.get(img.filepath)
                 if not palette_record:
                     # No palette data - exclude when color filtering
                     continue
