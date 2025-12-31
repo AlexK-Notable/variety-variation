@@ -419,18 +419,6 @@ class ImageIndexer:
             except OSError:
                 pass
 
-    def _is_image_file(self, filepath: str) -> bool:
-        """Check if a file is a supported image format.
-
-        Args:
-            filepath: Path to the file.
-
-        Returns:
-            True if the file has a supported image extension.
-        """
-        _, ext = os.path.splitext(filepath)
-        return ext.lower() in IMAGE_EXTENSIONS
-
     @staticmethod
     def _batch(items: List[Any], size: int) -> Iterator[List[Any]]:
         """Yield successive batches from a list.
