@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -367,6 +368,24 @@ def colors_equivalent(hex1: str, hex2: str, tolerance: int = 1) -> bool:
     )
 
 
+# Allowed base directories for template output
+# Security: Restricts where theming templates can write files
+ALLOWED_TARGET_DIRS = [
+    os.path.expanduser("~/.config"),
+    os.path.expanduser("~/.cache"),
+    os.path.expanduser("~/.local"),
+    "/tmp",
+]
+
+
+# Allowlist of known safe reload command executables
+SAFE_RELOAD_EXECUTABLES = {
+    "hyprctl", "swaymsg", "i3-msg", "killall", "polybar-msg",
+    "pkill", "kill", "systemctl", "dbus-send", "makoctl",
+    "kvantummanager", "dunst",
+}
+
+
 # Default reload commands for common applications
 DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     # Window managers / Compositors
@@ -531,6 +550,14 @@ class ThemeEngine:
 
                 # Expand ~ in target path
                 target_path = os.path.expanduser(target_path)
+
+                # Validate target path is in allowed directory
+                if not self._validate_target_path(target_path):
+                    logger.warning(
+                        f"Template {name} target path rejected: {target_path} "
+                        f"not in allowed directories"
+                    )
+                    continue
 
                 # Get reload command from defaults
                 reload_cmd = DEFAULT_RELOADS.get(name)
@@ -751,6 +778,61 @@ class ThemeEngine:
                 pass
             return False
 
+    def _validate_target_path(self, target_path: str) -> bool:
+        """Validate template target path is within allowed directories.
+
+        Security: Prevents arbitrary file writes by ensuring targets
+        are only in safe directories like ~/.config, ~/.cache, ~/.local.
+
+        Args:
+            target_path: The expanded target path to validate.
+
+        Returns:
+            True if path is within allowed directories.
+        """
+        # Check for path traversal attempt
+        if ".." in target_path:
+            logger.warning(f"Path traversal detected in target: {target_path}")
+            return False
+
+        # Resolve to absolute path, following symlinks
+        try:
+            resolved = os.path.realpath(target_path)
+        except (OSError, ValueError):
+            return False
+
+        # Must be under an allowed directory
+        for allowed_dir in ALLOWED_TARGET_DIRS:
+            try:
+                allowed_resolved = os.path.realpath(allowed_dir)
+                # Check if resolved path starts with allowed dir
+                if resolved.startswith(allowed_resolved + os.sep):
+                    return True
+                if resolved == allowed_resolved:
+                    return True
+            except (OSError, ValueError):
+                continue
+
+        return False
+
+    def _validate_reload_command(self, command: str) -> bool:
+        """Validate reload command against allowlist.
+
+        Args:
+            command: Shell command to validate.
+
+        Returns:
+            True if command executable is in allowlist.
+        """
+        try:
+            parts = shlex.split(command)
+            if not parts:
+                return False
+            executable = os.path.basename(parts[0])
+            return executable in SAFE_RELOAD_EXECUTABLES
+        except ValueError:
+            return False
+
     def _run_reload_command(self, command: str, template_name: str) -> None:
         """Run a reload command with timeout.
 
@@ -758,10 +840,18 @@ class ThemeEngine:
             command: Shell command to execute.
             template_name: Name of template (for logging).
         """
+        if not self._validate_reload_command(command):
+            logger.warning(
+                f"Reload command blocked for {template_name}: "
+                f"executable not in allowlist: {command}"
+            )
+            return
+
         try:
+            args = shlex.split(command)
             subprocess.run(
-                command,
-                shell=True,
+                args,
+                shell=False,
                 timeout=self.RELOAD_TIMEOUT,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -769,6 +859,8 @@ class ThemeEngine:
             logger.debug(f"Reload command succeeded for {template_name}")
         except subprocess.TimeoutExpired:
             logger.warning(f"Reload command timed out for {template_name}: {command}")
+        except FileNotFoundError:
+            logger.warning(f"Reload command executable not found for {template_name}: {command}")
         except Exception as e:
             logger.warning(f"Reload command failed for {template_name}: {e}")
 
