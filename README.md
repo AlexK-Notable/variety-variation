@@ -4,7 +4,7 @@
 
 The original [Variety](https://github.com/varietywalls/variety) is great. It downloads wallpapers from everywhere, rotates them automatically, and stays out of your way. But it picks wallpapers randomly. Completely randomly. So you see the same image three times in a week while hundreds of others gather dust.
 
-This fork fixes that. Variety Variation adds a **Smart Selection Engine** that tracks what you've seen, learns what you like, and (coming soon) picks wallpapers that match your color scheme. Same Variety you know, but smarter about what it shows you.
+This fork fixes that. Variety Variation adds a **Smart Selection Engine** that tracks what you've seen, learns what you like, and picks wallpapers that match your color scheme and time of day. Same Variety you know, but smarter about what it shows you.
 
 ## Why This Fork?
 
@@ -13,7 +13,8 @@ This fork fixes that. Variety Variation adds a **Smart Selection Engine** that t
 | "I keep seeing the same wallpapers" | **Recency tracking** - won't repeat images for N days |
 | "My favorites never come up" | **Favorites boost** - higher probability for images you've liked |
 | "Random doesn't feel balanced" | **Source rotation** - balances selection across all your sources |
-| "I want wallpapers that match my theme" | **Wallust integration** - color-aware selection (in progress) |
+| "I want wallpapers that match my theme" | **Wallust integration** - color-aware selection with palette matching |
+| "Bright wallpapers at night hurt my eyes" | **Time adaptation** - darker palettes at night, brighter during the day |
 | "Upstream is in maintenance mode" | **Active development** - new features being added |
 
 ## What's Different From Upstream
@@ -21,8 +22,10 @@ This fork fixes that. Variety Variation adds a **Smart Selection Engine** that t
 - **Smart Selection Engine**: Weighted selection replaces pure random
 - **Recency penalties**: Recently shown images get deprioritized
 - **Favorites awareness**: Your favorites are more likely to appear
-- **Color palette indexing**: Extract and store dominant colors (Wallust integration)
-- **Theme-aware selection**: Pick wallpapers by color temperature, lightness, palette similarity
+- **Color palette indexing**: Extract and store dominant colors via Wallust
+- **Color-aware selection**: Pick wallpapers by color temperature, lightness, palette similarity
+- **Time adaptation**: Automatically prefer darker palettes at night, brighter during the day
+- **Preferences UI**: Full GUI for configuring all selection parameters
 
 > **Note**: This is an active fork. Upstream Variety is in [maintenance mode](https://github.com/varietywalls/variety/issues/736).
 
@@ -34,9 +37,10 @@ This fork fixes that. Variety Variation adds a **Smart Selection Engine** that t
 |-------|--------|-------------|
 | Foundation | ✅ Complete | Database, indexing, favorites tracking |
 | Weighted Selection | ✅ Complete | Recency-based selection replacing random |
-| Wallust Integration | 🚧 In Progress | Color palette extraction and storage |
-| Color-Aware Selection | 📋 Planned | Filter by palette, temperature, lightness |
-| Preferences UI | 📋 Planned | Configure selection weights in GUI |
+| Wallust Integration | ✅ Complete | Color palette extraction and storage |
+| Color-Aware Selection | ✅ Complete | Filter by palette, temperature, lightness |
+| Preferences UI | ✅ Complete | Configure selection weights in GUI |
+| Time Adaptation | ✅ Complete | Day/night palette preferences |
 
 ---
 
@@ -115,7 +119,8 @@ variety-variation/
 │   │   ├── indexer.py        # Image indexing
 │   │   ├── palette.py        # Color extraction
 │   │   ├── theming.py        # Wallust integration
-│   │   └── weights.py        # Selection weights
+│   │   ├── weights.py        # Selection weights
+│   │   └── time_adapter.py   # Day/night adaptation
 │   └── plugins/
 │       └── builtin/
 │           ├── downloaders/  # Image sources
