@@ -489,6 +489,74 @@ class TestColorSimilarity(unittest.TestCase):
         similarity = palette_similarity(palette1, palette2)
         self.assertGreater(similarity, 0.8)
 
+    def test_palette_similarity_uses_oklab_when_colors_present(self):
+        """palette_similarity uses OKLAB when color values are present."""
+        from variety.smart_selection.palette import palette_similarity
+
+        # Palette with color values should use OKLAB
+        palette1 = {
+            'color0': '#FF0000',
+            'color1': '#00FF00',
+            'color2': '#0000FF',
+            'avg_hue': 180,
+            'avg_saturation': 0.5,
+            'avg_lightness': 0.5,
+        }
+        palette2 = {
+            'color0': '#FF0000',
+            'color1': '#00FF00',
+            'color2': '#0000FF',
+            'avg_hue': 0,  # Different avg_hue, but same colors
+            'avg_saturation': 0.5,
+            'avg_lightness': 0.5,
+        }
+
+        # With OKLAB (default), identical colors should give high similarity
+        similarity_oklab = palette_similarity(palette1, palette2, use_oklab=True)
+        self.assertAlmostEqual(similarity_oklab, 1.0, places=2)
+
+        # With HSL, the different avg_hue should give lower similarity
+        similarity_hsl = palette_similarity(palette1, palette2, use_oklab=False)
+        self.assertLess(similarity_hsl, 0.7)  # Different due to hue difference
+
+    def test_palette_similarity_fallback_to_hsl(self):
+        """palette_similarity falls back to HSL when no color values present."""
+        from variety.smart_selection.palette import palette_similarity
+
+        # Palette without color values
+        palette1 = {
+            'avg_hue': 180,
+            'avg_saturation': 0.5,
+            'avg_lightness': 0.5,
+            'color_temperature': 0.0,
+        }
+        palette2 = {
+            'avg_hue': 180,
+            'avg_saturation': 0.5,
+            'avg_lightness': 0.5,
+            'color_temperature': 0.0,
+        }
+
+        # Should fall back to HSL and still work
+        similarity = palette_similarity(palette1, palette2, use_oklab=True)
+        self.assertAlmostEqual(similarity, 1.0, places=2)
+
+    def test_palette_similarity_hsl_explicit(self):
+        """palette_similarity with use_oklab=False uses HSL."""
+        from variety.smart_selection.palette import palette_similarity, palette_similarity_hsl
+
+        palette = {
+            'avg_hue': 180,
+            'avg_saturation': 0.5,
+            'avg_lightness': 0.5,
+            'color_temperature': 0.0,
+        }
+
+        # Should give same result as explicit HSL function
+        result_via_param = palette_similarity(palette, palette, use_oklab=False)
+        result_direct = palette_similarity_hsl(palette, palette)
+        self.assertAlmostEqual(result_via_param, result_direct, places=6)
+
 
 if __name__ == '__main__':
     unittest.main()

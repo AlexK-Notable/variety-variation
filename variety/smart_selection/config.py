@@ -28,6 +28,9 @@ class SelectionConfig:
             Options: 'exponential', 'linear', 'step'. Default: 'exponential'.
         enabled: Whether smart selection is enabled.
             If False, falls back to random selection. Default: True.
+        use_oklab_similarity: Use perceptually uniform OKLAB color space for
+            color similarity calculations. OKLAB provides more accurate
+            perceptual matching than HSL. Default: True.
     """
     image_cooldown_days: float = 7.0
     source_cooldown_days: float = 1.0
@@ -36,6 +39,7 @@ class SelectionConfig:
     color_match_weight: float = 1.0
     recency_decay: str = 'exponential'
     enabled: bool = True
+    use_oklab_similarity: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to a dictionary.

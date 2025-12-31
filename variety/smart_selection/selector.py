@@ -3,9 +3,15 @@
 
 Provides weighted selection based on recency, source rotation,
 favorites boost, and optional constraints.
+
+This is a facade that orchestrates the selection components:
+- CandidateProvider: Database queries for candidate images
+- ConstraintApplier: Color and dimension filtering
+- SelectionEngine: Weighted random selection algorithm
 """
 
-import bisect
+import heapq
+import math
 import os
 import random
 import logging
@@ -15,12 +21,14 @@ from typing import List, Optional, Dict, Any, Callable, Set, TYPE_CHECKING
 from variety.smart_selection.database import ImageDatabase
 from variety.smart_selection.config import SelectionConfig
 from variety.smart_selection.models import ImageRecord, SelectionConstraints
-from variety.smart_selection.weights import calculate_weight
 from variety.smart_selection.palette import (
     PaletteExtractor,
     create_palette_record,
-    palette_similarity,
 )
+from variety.smart_selection.weights import calculate_weight
+from variety.smart_selection.selection.candidates import CandidateProvider, CandidateQuery
+from variety.smart_selection.selection.constraints import ConstraintApplier
+from variety.smart_selection.selection.engine import SelectionEngine
 
 if TYPE_CHECKING:
     from variety.smart_selection.statistics import CollectionStatistics
@@ -37,6 +45,11 @@ class SmartSelector:
     - Favorites boost
     - New image boost (never-shown images)
     - Optional constraints (dimensions, favorites only, sources)
+
+    This class is a facade that delegates to focused components:
+    - CandidateProvider for database queries
+    - ConstraintApplier for filtering
+    - SelectionEngine for weighted selection
     """
 
     def __init__(self, db_path: str, config: SelectionConfig,
@@ -59,6 +72,12 @@ class SmartSelector:
             self._enable_palette_extraction = enable_palette_extraction
             self._palette_extractor = None
             self._statistics: Optional['CollectionStatistics'] = None
+
+            # Initialize selection components
+            self._candidate_provider = CandidateProvider(self.db)
+            self._constraint_applier = ConstraintApplier(self.db)
+            self._selection_engine = SelectionEngine(self.db, config)
+
             if enable_palette_extraction:
                 self._palette_extractor = PaletteExtractor()
         except Exception:
@@ -96,83 +115,148 @@ class SmartSelector:
         Returns:
             List of file paths for selected images.
         """
-        # Get candidate images
+        # Get candidate images using the component pipeline
         candidates = self._get_candidates(constraints)
 
         if not candidates:
             return []
 
-        # If disabled, use uniform random
-        if not self.config.enabled:
-            selected = random.sample(candidates, min(count, len(candidates)))
-            return [img.filepath for img in selected]
+        # Delegate selection to SelectionEngine
+        return self._selection_engine.select(candidates, count, constraints)
 
-        # Extract target palette from constraints for color affinity
+    def select_images_streaming(
+        self,
+        count: int,
+        batch_size: int = 1000,
+        constraints: Optional[SelectionConstraints] = None,
+    ) -> List[str]:
+        """Select images using streaming weighted reservoir sampling.
+
+        Memory-efficient alternative to select_images() for large collections.
+        Uses weighted reservoir sampling to select without loading all
+        candidates into memory.
+
+        Algorithm: Weighted Reservoir Sampling (A-ES algorithm)
+        - Assign each item a key: random()^(1/weight)
+        - Keep the top-k items by key
+
+        Time Complexity: O(n log k) where n = total candidates, k = count
+        Space Complexity: O(k + batch_size) instead of O(n)
+
+        Args:
+            count: Number of images to select.
+            batch_size: Number of records to fetch per database batch.
+            constraints: Optional filtering constraints.
+
+        Returns:
+            List of file paths for selected images.
+        """
+        # Reservoir: min-heap of (key, filepath) tuples
+        reservoir: List[tuple] = []
+
+        # Track source records for weight calculation (lazy loading)
+        sources_cache: Dict[str, Any] = {}
+        palettes_cache: Dict[str, Any] = {}
+
+        # Extract target palette from constraints
         target_palette = constraints.target_palette if constraints else None
+        use_color_matching = target_palette and self.config.color_match_weight
 
-        # Batch-load all source records for candidates to avoid N+1 queries
-        source_ids = list(set(img.source_id for img in candidates if img.source_id))
-        sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
+        # Determine source filter for cursor
+        source_filter = None
+        if constraints and constraints.sources and len(constraints.sources) == 1:
+            source_filter = constraints.sources[0]
 
-        # Batch-load palettes if color constraints are active
-        palettes = {}
-        if target_palette and self.config.color_match_weight:
-            filepaths = [img.filepath for img in candidates]
-            palettes = self.db.get_palettes_by_filepaths(filepaths)
+        # If favorites_only, we can't use cursor efficiently - fall back to batch
+        if constraints and constraints.favorites_only:
+            return self.select_images(count, constraints)
 
-        # Calculate weights for each candidate
-        weights = []
-        for img in candidates:
-            source_last_shown = None
-            if img.source_id and img.source_id in sources:
-                source_last_shown = sources[img.source_id].last_shown_at
+        # If multiple sources specified, fall back to batch method
+        if constraints and constraints.sources and len(constraints.sources) > 1:
+            return self.select_images(count, constraints)
 
-            # Get image palette for color affinity calculation
-            image_palette = palettes.get(img.filepath) if palettes else None
+        for batch in self.db.get_images_cursor(batch_size=batch_size, source_id=source_filter):
+            # Filter batch for file existence and constraints
+            filtered_batch = self._filter_batch(batch, constraints)
 
-            weight = calculate_weight(
-                img, source_last_shown, self.config,
-                image_palette=image_palette,
-                target_palette=target_palette,
-                constraints=constraints,
-            )
-            weights.append(weight)
+            if not filtered_batch:
+                continue
 
-        # Weighted random selection without replacement
-        # Use cumulative weights with binary search for O(log n) lookups
-        selected = []
-        remaining_candidates = list(candidates)
-        remaining_weights = list(weights)
+            # Batch-load sources for weight calculation
+            batch_source_ids = list(set(
+                img.source_id for img in filtered_batch
+                if img.source_id and img.source_id not in sources_cache
+            ))
+            if batch_source_ids:
+                new_sources = self.db.get_sources_by_ids(batch_source_ids)
+                sources_cache.update(new_sources)
 
-        for _ in range(min(count, len(candidates))):
-            if not remaining_candidates:
-                break
+            # Batch-load palettes if color matching is active
+            if use_color_matching:
+                batch_filepaths = [
+                    img.filepath for img in filtered_batch
+                    if img.filepath not in palettes_cache
+                ]
+                if batch_filepaths:
+                    new_palettes = self.db.get_palettes_by_filepaths(batch_filepaths)
+                    palettes_cache.update(new_palettes)
 
-            # Build cumulative weights for binary search
-            total_weight = sum(remaining_weights)
-            if total_weight <= 0:
-                # All weights are zero, fall back to uniform
-                idx = random.randrange(len(remaining_candidates))
-            else:
-                # Build cumulative sum for bisect
-                cumulative_weights = []
-                cumsum = 0.0
-                for w in remaining_weights:
-                    cumsum += w
-                    cumulative_weights.append(cumsum)
+            # Process each image in batch
+            for img in filtered_batch:
+                # Calculate weight
+                source_last_shown = None
+                if img.source_id and img.source_id in sources_cache:
+                    source_last_shown = sources_cache[img.source_id].last_shown_at
 
-                # Weighted random choice using binary search (O(log n))
-                r = random.uniform(0, total_weight)
-                idx = bisect.bisect_left(cumulative_weights, r)
+                image_palette = palettes_cache.get(img.filepath) if use_color_matching else None
 
-                # Clamp to valid range (handles float precision edge cases)
-                idx = min(idx, len(remaining_candidates) - 1)
+                if self.config.enabled:
+                    weight = calculate_weight(
+                        img, source_last_shown, self.config,
+                        image_palette=image_palette,
+                        target_palette=target_palette,
+                        constraints=constraints,
+                    )
+                else:
+                    weight = 1.0
 
-            selected.append(remaining_candidates[idx])
-            remaining_candidates.pop(idx)
-            remaining_weights.pop(idx)
+                # Weighted reservoir sampling key: random()^(1/weight)
+                # Using log transform for numerical stability: log(random()) / weight
+                r = random.random()
+                if r > 0 and weight > 0:
+                    key = math.log(r) / weight
+                else:
+                    key = float('-inf')
 
-        return [img.filepath for img in selected]
+                if len(reservoir) < count:
+                    heapq.heappush(reservoir, (key, img.filepath))
+                elif key > reservoir[0][0]:
+                    heapq.heapreplace(reservoir, (key, img.filepath))
+
+        return [filepath for _, filepath in reservoir]
+
+    def _filter_batch(
+        self,
+        batch: List[ImageRecord],
+        constraints: Optional[SelectionConstraints],
+    ) -> List[ImageRecord]:
+        """Filter a batch of images for existence and constraints.
+
+        Args:
+            batch: List of ImageRecords to filter.
+            constraints: Optional filtering constraints.
+
+        Returns:
+            Filtered list of ImageRecords.
+        """
+        # Filter out non-existent files
+        filtered = [img for img in batch if os.path.exists(img.filepath)]
+
+        if not constraints:
+            return filtered
+
+        # Use ConstraintApplier for dimension and color filtering
+        return self._constraint_applier.apply(filtered, constraints)
 
     def _get_candidates(
         self,
@@ -186,137 +270,23 @@ class SmartSelector:
         Returns:
             List of ImageRecord objects matching constraints.
         """
-        # Start with all images or filtered by source
-        if constraints and constraints.sources:
-            candidates = []
-            for source_id in constraints.sources:
-                candidates.extend(self.db.get_images_by_source(source_id))
-        elif constraints and constraints.favorites_only:
-            candidates = self.db.get_favorite_images()
-        else:
-            candidates = self.db.get_all_images()
+        # Build query from constraints
+        query = CandidateQuery.from_constraints(constraints)
 
-        # File Existence Filtering (Phantom Index Protection)
-        #
-        # Filter out images whose files no longer exist on disk. This handles
-        # the case where files are deleted after being indexed in the database.
-        #
-        # Without this check, the selector could return paths to non-existent files,
-        # which would cause the wallpaper setter to fail with FileNotFoundError.
-        #
-        # Race Condition Note:
-        # There's a small time-of-check-to-time-of-use (TOCTOU) race window between
-        # this existence check and when the caller actually opens the file. A file
-        # could be deleted between this check and use. Callers should handle
-        # FileNotFoundError gracefully as a final safety net.
-        #
-        # Performance: This adds minimal overhead (one stat syscall per candidate)
-        # and prevents selection failures that would require retry logic.
-        candidates = [img for img in candidates if os.path.exists(img.filepath)]
+        # Get candidates from database (with file existence check)
+        candidates = self._candidate_provider.get_candidates(query)
 
-        if not constraints:
-            return candidates
-
-        # Batch-load palettes if color filtering is active to avoid N+1 queries
-        palettes = {}
-        if constraints.target_palette:
-            filepaths = [img.filepath for img in candidates]
-            palettes = self.db.get_palettes_by_filepaths(filepaths)
-
-        # Apply constraint filters
-        filtered = []
-        for img in candidates:
-            # Min width
-            if constraints.min_width and img.width:
-                if img.width < constraints.min_width:
-                    continue
-
-            # Min height
-            if constraints.min_height and img.height:
-                if img.height < constraints.min_height:
-                    continue
-
-            # Aspect ratio range
-            if img.aspect_ratio:
-                if constraints.min_aspect_ratio:
-                    if img.aspect_ratio < constraints.min_aspect_ratio:
-                        continue
-                if constraints.max_aspect_ratio:
-                    if img.aspect_ratio > constraints.max_aspect_ratio:
-                        continue
-
-            # Favorites only (already handled above, but double-check)
-            if constraints.favorites_only and not img.is_favorite:
-                continue
-
-            # Color similarity filter
-            if constraints.target_palette:
-                # Get image's palette from batch-loaded dict
-                palette_record = palettes.get(img.filepath)
-                if not palette_record:
-                    # No palette data - exclude when color filtering
-                    continue
-
-                # Convert palette record to dict for similarity calculation
-                img_palette = {
-                    'avg_hue': palette_record.avg_hue,
-                    'avg_saturation': palette_record.avg_saturation,
-                    'avg_lightness': palette_record.avg_lightness,
-                    'color_temperature': palette_record.color_temperature,
-                }
-
-                # Calculate similarity
-                similarity = palette_similarity(constraints.target_palette, img_palette)
-
-                # Check threshold (default 0.5 if not specified)
-                min_similarity = constraints.min_color_similarity or 0.5
-                if similarity < min_similarity:
-                    continue
-
-            filtered.append(img)
-
-        # Log color filtering results
-        if constraints and constraints.target_palette:
-            before_count = len(candidates)
-            after_count = len(filtered)
-            excluded = before_count - after_count
-            logger.debug(
-                f"Color filter: {after_count}/{before_count} candidates passed "
-                f"(excluded {excluded}, threshold={constraints.min_color_similarity:.0%})"
-            )
-
-        return filtered
+        # Apply constraint filters (dimensions, colors, etc.)
+        return self._constraint_applier.apply(candidates, constraints)
 
     def record_shown(self, filepath: str, wallust_palette: Dict[str, Any] = None):
         """Record that an image was shown.
 
         If the image is not in the database, it will be indexed first.
 
-        Updates the image's last_shown_at, times_shown, and
-        optionally stores the wallust palette.
-
-        Thread Safety:
-            This method is thread-safe in that it will never corrupt data or crash,
-            but concurrent calls may result in lost count updates. Specifically:
-
-            1. upsert_image() uses INSERT...ON CONFLICT DO UPDATE (atomic)
-            2. record_image_shown() uses UPDATE times_shown + 1 (atomic)
-            3. SQLite serializes writes, ensuring database consistency
-
-            However, if multiple threads call this for the same NEW image concurrently:
-            - Multiple threads may index the image independently
-            - Later upsert_image() calls may overwrite times_shown=0, losing increments
-            - Final count may be less than the actual number of calls
-
-            This is acceptable because:
-            - No data corruption occurs (database remains consistent)
-            - In production, record_shown is called from a single thread
-            - Approximate counts are sufficient for wallpaper selection weighting
-
         Args:
             filepath: Path to the image that was shown.
             wallust_palette: Optional pre-extracted wallust color palette dict.
-                            If None and palette extraction is enabled, will extract automatically.
         """
         # Check if image exists in database, if not index it first
         existing = self.db.get_image(filepath)
@@ -359,27 +329,14 @@ class SmartSelector:
     # =========================================================================
 
     def get_statistics_analyzer(self) -> 'CollectionStatistics':
-        """Get the collection statistics analyzer (lazy initialization).
-
-        Returns:
-            CollectionStatistics instance for analyzing collection distributions.
-        """
+        """Get the collection statistics analyzer (lazy initialization)."""
         if self._statistics is None:
             from variety.smart_selection.statistics import CollectionStatistics
             self._statistics = CollectionStatistics(self.db)
         return self._statistics
 
     def get_statistics(self) -> Dict[str, Any]:
-        """Get statistics for preferences display.
-
-        Returns:
-            Dictionary with selection statistics:
-            - images_indexed: Total number of indexed images
-            - sources_count: Number of sources
-            - images_with_palettes: Images with extracted color palettes
-            - total_selections: Total times any image has been shown
-            - unique_shown: Number of unique images shown at least once
-        """
+        """Get statistics for preferences display."""
         return {
             'images_indexed': self.db.count_images(),
             'sources_count': self.db.count_sources(),
@@ -389,32 +346,17 @@ class SmartSelector:
         }
 
     def clear_history(self):
-        """Clear selection history (reset times_shown and last_shown_at).
-
-        This keeps all indexed images but resets their selection tracking,
-        giving all images an equal chance of being selected again.
-        """
+        """Clear selection history (reset times_shown and last_shown_at)."""
         self.db.clear_history()
         logger.info("Cleared selection history")
 
-        # Invalidate statistics cache (freshness distribution changes)
         if self._statistics:
             self._statistics.invalidate()
 
     def rebuild_index(self, source_folders: List[str] = None,
                       favorites_folder: str = None,
                       progress_callback: Callable[[int, int], None] = None):
-        """Rebuild the image index from scratch.
-
-        Clears all existing index data and re-scans source folders.
-        Creates a backup of the database before clearing.
-
-        Args:
-            source_folders: List of folder paths to index.
-                           If None, clears index without re-populating.
-            favorites_folder: Path to favorites folder for marking favorites.
-            progress_callback: Optional callback(current, total) for progress updates.
-        """
+        """Rebuild the image index from scratch."""
         from variety.smart_selection.indexer import ImageIndexer
 
         # Backup before destructive operation
@@ -441,7 +383,6 @@ class SmartSelector:
                 progress_callback(total, total)
             logger.info(f"Rebuilt index with {self.db.count_images()} images")
 
-        # Invalidate statistics cache
         if self._statistics:
             self._statistics.invalidate()
 
@@ -450,17 +391,7 @@ class SmartSelector:
         progress_callback: Optional[Callable[[int, int], None]] = None,
         batch_size: int = 500,
     ) -> int:
-        """Extract palettes for all images that don't have them.
-
-        Processes in batches to limit memory usage for large collections.
-
-        Args:
-            progress_callback: Optional callback(current, total) for progress.
-            batch_size: Number of images to process per batch.
-
-        Returns:
-            Number of palettes successfully extracted.
-        """
+        """Extract palettes for all images that don't have them."""
         if not self._palette_extractor:
             self._palette_extractor = PaletteExtractor()
 
@@ -469,14 +400,10 @@ class SmartSelector:
             return 0
 
         extracted_count = 0
-        failed_files: Set[str] = set()  # Track failures to avoid infinite loop
+        failed_files: Set[str] = set()
 
         while True:
-            # Fetch batch - offset=0 because successful extractions get palettes
-            # so they won't appear in next query
             images = self.db.get_images_without_palettes(limit=batch_size, offset=0)
-
-            # Filter out previously failed images to prevent infinite loop
             images = [img for img in images if img.filepath not in failed_files]
 
             if not images:
@@ -493,15 +420,13 @@ class SmartSelector:
                         logger.warning(f"Failed to store palette for {image.filepath}: {e}")
                         failed_files.add(image.filepath)
                 else:
-                    # Extraction failed - mark to avoid retry
                     failed_files.add(image.filepath)
 
                 if progress_callback:
-                    progress_callback(extracted_count, -1)  # Total unknown
+                    progress_callback(extracted_count, -1)
 
         logger.info(f"Extracted {extracted_count} palettes")
 
-        # Invalidate statistics cache (color distributions change)
         if extracted_count > 0 and self._statistics:
             self._statistics.invalidate()
 
@@ -512,17 +437,7 @@ class SmartSelector:
     # =========================================================================
 
     def get_time_based_temperature(self) -> float:
-        """Get target color temperature based on current time.
-
-        Returns a value indicating preferred color temperature:
-        - Lower values (0.3) = cool/bright (morning)
-        - 0.5 = neutral (afternoon)
-        - Higher values (0.7) = warm/cozy (evening)
-        - 0.4 = neutral-dark (night)
-
-        Returns:
-            Target color temperature value between 0.0 and 1.0.
-        """
+        """Get target color temperature based on current time."""
         hour = datetime.now().hour
 
         if 6 <= hour < 12:      # Morning
@@ -535,11 +450,7 @@ class SmartSelector:
             return 0.4  # Neutral-dark
 
     def get_time_period(self) -> str:
-        """Get the current time period name.
-
-        Returns:
-            One of: 'morning', 'afternoon', 'evening', 'night'
-        """
+        """Get the current time period name."""
         hour = datetime.now().hour
 
         if 6 <= hour < 12:
@@ -560,70 +471,26 @@ class SmartSelector:
         count: int = 20,
         constraints: Optional[SelectionConstraints] = None,
     ) -> List[Dict[str, Any]]:
-        """Get preview candidates with their calculated weights.
-
-        Returns top candidates sorted by weight for preview display.
-        Each result includes the image path and its calculated weight.
-
-        Args:
-            count: Maximum number of candidates to return.
-            constraints: Optional filtering constraints.
-
-        Returns:
-            List of dicts with keys:
-            - filepath: Path to the image
-            - filename: Image filename
-            - weight: Calculated selection weight (0.0-1.0 normalized)
-            - is_favorite: Whether image is marked as favorite
-            - times_shown: Number of times image has been shown
-            - source_id: Source identifier
-        """
+        """Get preview candidates with their calculated weights."""
         candidates = self._get_candidates(constraints)
 
         if not candidates:
             return []
 
-        # Extract target palette from constraints for color affinity
-        target_palette = constraints.target_palette if constraints else None
+        # Use SelectionEngine to score candidates
+        scored = self._selection_engine.score_candidates(candidates, constraints)
 
-        # Batch-load all source records for candidates to avoid N+1 queries
-        source_ids = list(set(img.source_id for img in candidates if img.source_id))
-        sources = self.db.get_sources_by_ids(source_ids) if source_ids else {}
-
-        # Batch-load palettes if color constraints are active
-        palettes = {}
-        if target_palette and self.config.color_match_weight:
-            filepaths = [img.filepath for img in candidates]
-            palettes = self.db.get_palettes_by_filepaths(filepaths)
-
-        # Calculate weights for each candidate
-        weighted_candidates = []
-        for img in candidates:
-            source_last_shown = None
-            if img.source_id and img.source_id in sources:
-                source_last_shown = sources[img.source_id].last_shown_at
-
-            # Get image palette for color affinity calculation
-            image_palette = palettes.get(img.filepath) if palettes else None
-
-            weight = calculate_weight(
-                img, source_last_shown, self.config,
-                image_palette=image_palette,
-                target_palette=target_palette,
-                constraints=constraints,
-            )
-            weighted_candidates.append({
-                'filepath': img.filepath,
-                'filename': img.filename,
-                'weight': weight,
-                'is_favorite': img.is_favorite,
-                'times_shown': img.times_shown,
-                'source_id': img.source_id,
+        # Convert to dict format and take top N
+        top_candidates = []
+        for sc in scored[:count]:
+            top_candidates.append({
+                'filepath': sc.image.filepath,
+                'filename': sc.image.filename,
+                'weight': sc.weight,
+                'is_favorite': sc.image.is_favorite,
+                'times_shown': sc.image.times_shown,
+                'source_id': sc.image.source_id,
             })
-
-        # Sort by weight (highest first) and take top N
-        weighted_candidates.sort(key=lambda x: x['weight'], reverse=True)
-        top_candidates = weighted_candidates[:count]
 
         # Normalize weights to 0-1 range for display
         if top_candidates:
@@ -642,14 +509,7 @@ class SmartSelector:
     # =========================================================================
 
     def vacuum_database(self) -> bool:
-        """Optimize and compact the database.
-
-        Reclaims space from deleted records and optimizes storage.
-        Should be called periodically for long-running installations.
-
-        Returns:
-            True if vacuum succeeded, False otherwise.
-        """
+        """Optimize and compact the database."""
         if self.db.vacuum():
             logger.info("Database vacuum completed successfully")
             return True
@@ -658,37 +518,12 @@ class SmartSelector:
             return False
 
     def verify_index(self) -> Dict[str, Any]:
-        """Verify database integrity and check for issues.
-
-        Checks for:
-        - SQLite integrity errors
-        - Orphaned palette records (no matching image)
-        - Missing files (indexed but no longer on disk)
-
-        Returns:
-            Dictionary with verification results:
-            - is_valid: Overall integrity status
-            - integrity_result: SQLite integrity check result
-            - orphaned_palettes: Number of orphaned palette records
-            - missing_files: Number of indexed files not on disk
-            - total_images: Total indexed images
-            - total_palettes: Total palette records
-        """
+        """Verify database integrity and check for issues."""
         return self.db.verify_integrity()
 
     def cleanup_index(self, remove_orphans: bool = True,
                       remove_missing: bool = True) -> Dict[str, int]:
-        """Clean up the index by removing invalid entries.
-
-        Args:
-            remove_orphans: If True, remove orphaned palette records.
-            remove_missing: If True, remove entries for files that no longer exist.
-
-        Returns:
-            Dictionary with cleanup results:
-            - orphans_removed: Number of orphaned palettes removed
-            - missing_removed: Number of missing file entries removed
-        """
+        """Clean up the index by removing invalid entries."""
         results = {'orphans_removed': 0, 'missing_removed': 0}
 
         if remove_orphans:
@@ -706,14 +541,7 @@ class SmartSelector:
         return results
 
     def backup_database(self, backup_path: str = None) -> bool:
-        """Create a backup of the database.
-
-        Args:
-            backup_path: Path for backup file. If None, uses db_path + '.backup'.
-
-        Returns:
-            True if backup succeeded, False otherwise.
-        """
+        """Create a backup of the database."""
         if backup_path is None:
             backup_path = self.db.db_path + '.backup'
 

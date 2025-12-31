@@ -146,15 +146,23 @@ def color_affinity_factor(
         return 0.8
 
     # Convert PaletteRecord to dict for similarity calculation
+    # Include both avg_* metrics (for HSL) and color values (for OKLAB)
     img_palette = {
         'avg_hue': image_palette.avg_hue,
         'avg_saturation': image_palette.avg_saturation,
         'avg_lightness': image_palette.avg_lightness,
         'color_temperature': image_palette.color_temperature,
     }
+    # Add color values for OKLAB similarity
+    for i in range(16):
+        color_attr = f'color{i}'
+        if hasattr(image_palette, color_attr):
+            img_palette[color_attr] = getattr(image_palette, color_attr)
 
     # Calculate similarity (0.0 to 1.0)
-    similarity = palette_similarity(target_palette, img_palette)
+    # Use OKLAB if configured (default True for perceptual accuracy)
+    use_oklab = getattr(config, 'use_oklab_similarity', True)
+    similarity = palette_similarity(target_palette, img_palette, use_oklab=use_oklab)
 
     # Get weight factor from constraints (continuity mode) or config
     weight = config.color_match_weight

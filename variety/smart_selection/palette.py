@@ -13,8 +13,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
-from typing import Dict, Any, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Dict, Any, List, Optional, Tuple
 
 from variety.smart_selection.models import PaletteRecord
 from variety.smart_selection.wallust_config import get_config_manager
@@ -278,6 +280,8 @@ class PaletteExtractor:
             wallust_path: Path to wallust binary. If None, uses system PATH.
         """
         self.wallust_path = wallust_path or shutil.which('wallust')
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._shutdown_event = threading.Event()
 
     def is_wallust_available(self) -> bool:
         """Check if wallust is available.
@@ -434,6 +438,110 @@ class PaletteExtractor:
             logger.warning(f"Failed to parse palette data from {image_path}: {e}")
             return None
 
+    def _extract_single(self, image_path: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """Thread-safe wrapper for single extraction.
+
+        Args:
+            image_path: Path to the image file.
+
+        Returns:
+            Tuple of (image_path, palette_data or None).
+        """
+        # Check shutdown event before processing
+        if self._shutdown_event.is_set():
+            return (image_path, None)
+
+        try:
+            result = self.extract_palette(image_path)
+            return (image_path, result)
+        except Exception as e:
+            logger.warning(f"Exception extracting palette from {image_path}: {e}")
+            return (image_path, None)
+
+    def extract_all_palettes_parallel(
+        self,
+        images: List[str],
+        max_workers: int = 4,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Extract palettes in parallel using ThreadPoolExecutor.
+
+        Args:
+            images: List of image paths.
+            max_workers: Number of parallel workers (default 4).
+            progress_callback: Called with (completed, total).
+
+        Returns:
+            Dict mapping filepath to palette data (or None if failed).
+        """
+        if not images:
+            return {}
+
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        total = len(images)
+        completed = 0
+
+        # Reset shutdown event for new extraction batch
+        self._shutdown_event.clear()
+
+        # Create executor for this batch
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+        try:
+            # Submit all tasks
+            future_to_path = {
+                self._executor.submit(self._extract_single, path): path
+                for path in images
+            }
+
+            # Process results as they complete
+            for future in as_completed(future_to_path):
+                # Check for shutdown
+                if self._shutdown_event.is_set():
+                    # Cancel remaining futures
+                    for f in future_to_path:
+                        f.cancel()
+                    break
+
+                try:
+                    path, palette_data = future.result(timeout=60)
+                    results[path] = palette_data
+                except Exception as e:
+                    # Handle any exception from the future
+                    path = future_to_path[future]
+                    logger.warning(f"Failed to get result for {path}: {e}")
+                    results[path] = None
+
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total)
+
+        finally:
+            # Clean up executor
+            self._executor.shutdown(wait=False)
+            self._executor = None
+
+        # Ensure all paths are in results (for cancelled futures)
+        for path in images:
+            if path not in results:
+                results[path] = None
+
+        return results
+
+    def shutdown(self) -> None:
+        """Graceful shutdown with event signaling.
+
+        Signals running extractions to stop and cleans up the executor.
+        Safe to call multiple times.
+        """
+        # Signal shutdown to running extractions
+        self._shutdown_event.set()
+
+        # Shutdown executor if active
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+
 
 def create_palette_record(filepath: str, palette_data: Dict[str, Any]) -> PaletteRecord:
     """Create a PaletteRecord from extracted palette data.
@@ -474,14 +582,18 @@ def create_palette_record(filepath: str, palette_data: Dict[str, Any]) -> Palett
     )
 
 
-def palette_similarity(palette1: Dict[str, Any], palette2: Dict[str, Any]) -> float:
-    """Calculate similarity between two palettes.
+def palette_similarity_hsl(palette1: Dict[str, Any], palette2: Dict[str, Any]) -> float:
+    """Calculate similarity between two palettes using HSL metrics.
 
-    Uses a weighted combination of:
+    This is the legacy HSL-based similarity calculation. It uses a weighted
+    combination of:
     - Hue similarity (circular distance)
     - Saturation difference
     - Lightness difference
     - Temperature difference
+
+    Note: HSL has non-uniform perceptual properties. For more accurate
+    perceptual matching, use palette_similarity with use_oklab=True.
 
     Args:
         palette1: First palette with avg_* metrics.
@@ -533,3 +645,67 @@ def palette_similarity(palette1: Dict[str, Any], palette2: Dict[str, Any]) -> fl
     )
 
     return max(0.0, min(1.0, similarity))
+
+
+def palette_similarity(
+    palette1: Dict[str, Any],
+    palette2: Dict[str, Any],
+    use_oklab: bool = True,
+) -> float:
+    """Calculate similarity between two palettes.
+
+    When use_oklab=True (default), uses the perceptually uniform OKLAB
+    color space for more accurate color matching. This requires color
+    values in the palette (color0-color15).
+
+    When use_oklab=False, falls back to HSL-based metrics (avg_hue,
+    avg_saturation, avg_lightness, color_temperature).
+
+    Args:
+        palette1: First palette dict. For OKLAB: needs color0-color15.
+                  For HSL: needs avg_* metrics.
+        palette2: Second palette dict.
+        use_oklab: If True, use OKLAB color space (default).
+                   If False, use legacy HSL-based similarity.
+
+    Returns:
+        Similarity score from 0 (very different) to 1 (identical).
+    """
+    # Handle missing data
+    if not palette1 or not palette2:
+        return 0.0
+
+    if use_oklab:
+        # Extract colors for OKLAB comparison
+        colors1 = _extract_palette_colors(palette1)
+        colors2 = _extract_palette_colors(palette2)
+
+        if colors1 and colors2:
+            from variety.smart_selection.color_science import palette_similarity_oklab
+            return palette_similarity_oklab(
+                {'colors': colors1},
+                {'colors': colors2},
+            )
+        # Fall back to HSL if no color values available
+        return palette_similarity_hsl(palette1, palette2)
+
+    return palette_similarity_hsl(palette1, palette2)
+
+
+def _extract_palette_colors(palette: Dict[str, Any]) -> list:
+    """Extract color hex values from a palette dict.
+
+    Looks for color0 through color15 keys.
+
+    Args:
+        palette: Palette dict with colorN keys.
+
+    Returns:
+        List of hex color strings found.
+    """
+    colors = []
+    for i in range(16):
+        key = f'color{i}'
+        if key in palette and palette[key]:
+            colors.append(palette[key])
+    return colors

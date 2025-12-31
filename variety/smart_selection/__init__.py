@@ -29,6 +29,17 @@ from variety.smart_selection.palette import (
     PaletteExtractor,
     create_palette_record,
     palette_similarity,
+    palette_similarity_hsl,
+)
+from variety.smart_selection.color_science import (
+    rgb_to_oklab,
+    hex_to_oklab,
+    oklab_distance,
+    color_distance_oklab,
+    palette_similarity_oklab,
+    get_oklab_lightness,
+    get_oklab_chroma,
+    get_oklab_hue,
 )
 
 __all__ = [
@@ -62,4 +73,14 @@ __all__ = [
     'PaletteExtractor',
     'create_palette_record',
     'palette_similarity',
+    'palette_similarity_hsl',
+    # Color science (OKLAB)
+    'rgb_to_oklab',
+    'hex_to_oklab',
+    'oklab_distance',
+    'color_distance_oklab',
+    'palette_similarity_oklab',
+    'get_oklab_lightness',
+    'get_oklab_chroma',
+    'get_oklab_hue',
 ]

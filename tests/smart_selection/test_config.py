@@ -68,6 +68,23 @@ class TestSelectionConfig(unittest.TestCase):
         self.assertEqual(config.recency_decay, 'exponential')
         self.assertTrue(config.enabled)
 
+        # Color science defaults (OKLAB enabled by default)
+        self.assertTrue(config.use_oklab_similarity)
+
+    def test_selection_config_has_oklab_field(self):
+        """SelectionConfig has use_oklab_similarity field for perceptual color matching."""
+        from variety.smart_selection.config import SelectionConfig
+
+        field_names = {f.name for f in fields(SelectionConfig)}
+        self.assertIn('use_oklab_similarity', field_names)
+
+    def test_selection_config_oklab_can_be_disabled(self):
+        """use_oklab_similarity can be set to False to use legacy HSL."""
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(use_oklab_similarity=False)
+        self.assertFalse(config.use_oklab_similarity)
+
     def test_selection_config_custom_values(self):
         """SelectionConfig can be created with custom values."""
         from variety.smart_selection.config import SelectionConfig

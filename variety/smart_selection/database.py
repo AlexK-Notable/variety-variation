@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 import os
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Iterator
 
 from variety.smart_selection.models import (
     ImageRecord,
@@ -407,6 +407,56 @@ class ImageDatabase:
             cursor = self.conn.cursor()
             cursor.execute('SELECT * FROM images WHERE is_favorite = 1')
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
+
+    def get_images_cursor(
+        self,
+        batch_size: int = 1000,
+        source_id: Optional[str] = None,
+    ) -> Iterator[List[ImageRecord]]:
+        """Stream images in batches from database.
+
+        Memory efficient alternative to get_all_images(). Iterates over
+        the database using LIMIT/OFFSET pagination to avoid loading all
+        records into memory at once.
+
+        Args:
+            batch_size: Number of records per batch. Default 1000.
+            source_id: Optional source_id to filter by. If None, returns all.
+
+        Yields:
+            Lists of ImageRecord, up to batch_size each.
+
+        Example:
+            for batch in db.get_images_cursor(batch_size=500):
+                for image in batch:
+                    process(image)
+        """
+        offset = 0
+        while True:
+            with self._lock:
+                cursor = self.conn.cursor()
+                if source_id is not None:
+                    cursor.execute(
+                        'SELECT * FROM images WHERE source_id = ? '
+                        'ORDER BY filepath LIMIT ? OFFSET ?',
+                        (source_id, batch_size, offset)
+                    )
+                else:
+                    cursor.execute(
+                        'SELECT * FROM images ORDER BY filepath LIMIT ? OFFSET ?',
+                        (batch_size, offset)
+                    )
+                rows = cursor.fetchall()
+
+            if not rows:
+                break
+
+            yield [self._row_to_image_record(row) for row in rows]
+            offset += len(rows)
+
+            # If we got fewer than batch_size, we've reached the end
+            if len(rows) < batch_size:
+                break
 
     def record_image_shown(self, filepath: str):
         """Record that an image was shown.
