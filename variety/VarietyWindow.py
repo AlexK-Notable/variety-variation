@@ -422,6 +422,11 @@ class VarietyWindow(Gtk.Window):
                     if total_indexed > 0:
                         logger.info(lambda: f"Smart Selection: Indexed {total_indexed} images from {len(folders_to_index)} folders")
 
+                    # Cleanup stale entries for files that no longer exist (always run)
+                    removed = self.smart_selector.db.remove_missing_files()
+                    if removed > 0:
+                        logger.info(lambda: f"Smart Selection: Removed {removed} stale entries for missing files")
+
                 except Exception as e:
                     logger.warning(lambda: f"Smart Selection: Failed to index sources: {e}")
 
