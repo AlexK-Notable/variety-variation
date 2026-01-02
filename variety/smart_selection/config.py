@@ -65,6 +65,9 @@ class SelectionConfig:
             Only used when night_preset is 'custom'. Default: 0.4.
         palette_tolerance: How strictly to match palette targets (0.1-0.5).
             Lower = stricter matching with less variety. Default: 0.3.
+        time_affinity_weight: Strength of time-based palette preference (0.5-3.0).
+            Higher values more aggressively penalize mismatched brightness.
+            1.0 = moderate (0.5x-1.5x), 2.0 = strong (0.25x-2.0x). Default: 2.0.
     """
     image_cooldown_days: float = 7.0
     source_cooldown_days: float = 1.0
@@ -92,6 +95,7 @@ class SelectionConfig:
     night_temperature: float = 0.4
     night_saturation: float = 0.4
     palette_tolerance: float = 0.3
+    time_affinity_weight: float = 2.0  # Strong preference for matching brightness
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to a dictionary.

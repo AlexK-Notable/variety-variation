@@ -33,12 +33,14 @@ def recency_factor(
     Returns:
         Factor between 0 and 1.
     """
-    # Never shown or cooldown disabled
-    if last_shown_at is None or cooldown_days <= 0:
+    # Never shown or cooldown disabled - handle None and invalid types defensively
+    if last_shown_at is None or not isinstance(last_shown_at, (int, float)):
+        return 1.0
+    if cooldown_days is None or cooldown_days <= 0:
         return 1.0
 
     now = int(time.time())
-    elapsed_seconds = now - last_shown_at
+    elapsed_seconds = now - int(last_shown_at)
     cooldown_seconds = cooldown_days * 24 * 60 * 60
 
     # Guard against negative elapsed time (clock jumped backward)
@@ -118,6 +120,7 @@ def calculate_time_affinity(
     target_temperature: float,
     target_saturation: float,
     tolerance: float = 0.3,
+    strength: float = 2.0,
 ) -> float:
     """Calculate affinity between image palette and time-based target.
 
@@ -131,13 +134,21 @@ def calculate_time_affinity(
         target_temperature: Target temperature value (-1.0 to +1.0).
         target_saturation: Target saturation value (0.0-1.0).
         tolerance: How strictly to match (0.1-0.5). Lower = stricter.
+        strength: How aggressively to penalize/boost (1.0-3.0).
+            1.0 = moderate (0.5x-1.5x), 2.0 = strong (0.25x-2.0x).
 
     Returns:
-        Multiplier from 0.5 (poor match) to 1.5 (excellent match).
+        Multiplier based on strength. At strength=2.0:
+        - 0.25 for poor match (far from target)
+        - 2.0 for excellent match (close to target)
         Returns 1.0 (neutral) if no palette data is available.
     """
     # No palette data - return neutral (don't penalize unindexed images)
     if not image_palette:
+        return 1.0
+
+    # Validate target values - return neutral if any are invalid
+    if target_lightness is None or target_temperature is None or target_saturation is None:
         return 1.0
 
     # Get image palette metrics, defaulting to neutral values
@@ -146,23 +157,29 @@ def calculate_time_affinity(
     img_saturation = image_palette.avg_saturation if image_palette.avg_saturation is not None else 0.5
 
     # Calculate distance in each dimension
-    lightness_diff = abs(img_lightness - target_lightness)
-    temp_diff = abs(img_temperature - target_temperature)
-    sat_diff = abs(img_saturation - target_saturation)
+    lightness_diff = abs(float(img_lightness) - float(target_lightness))
+    temp_diff = abs(float(img_temperature) - float(target_temperature))
+    sat_diff = abs(float(img_saturation) - float(target_saturation))
 
-    # Weighted average: lightness matters most for day/night distinction
-    # Lightness: 50%, Temperature: 30%, Saturation: 20%
-    distance = (lightness_diff * 0.5) + (temp_diff * 0.3) + (sat_diff * 0.2)
+    # Weighted average: lightness matters MOST for day/night distinction
+    # Lightness: 70%, Temperature: 20%, Saturation: 10%
+    distance = (lightness_diff * 0.7) + (temp_diff * 0.2) + (sat_diff * 0.1)
+
+    # Calculate penalty/boost range based on strength
+    # strength=1.0: min=0.5, max=1.5 (weak)
+    # strength=2.0: min=0.25, max=2.0 (strong)
+    # strength=3.0: min=0.125, max=2.5 (very strong)
+    min_mult = 1.0 / (1.0 + strength)  # e.g., 0.33 at strength=2
+    max_mult = 1.0 + strength          # e.g., 3.0 at strength=2
 
     # Convert distance to affinity score using tolerance
-    # distance=0 -> 1.5 (perfect match, boost)
-    # distance>=tolerance -> 0.5 (poor match, penalty)
     if distance >= tolerance:
-        return 0.5
+        return min_mult
 
-    # Linear interpolation: 1.5 at distance=0, 0.5 at distance=tolerance
-    affinity = 1.5 - (distance / tolerance)
-    return max(0.5, min(1.5, affinity))
+    # Linear interpolation: max_mult at distance=0, min_mult at distance=tolerance
+    ratio = distance / tolerance
+    affinity = max_mult - (ratio * (max_mult - min_mult))
+    return max(min_mult, min(max_mult, affinity))
 
 
 def color_affinity_factor(
@@ -306,6 +323,7 @@ def calculate_weight(
             time_target_temperature,
             time_target_saturation,
             config.palette_tolerance,
+            getattr(config, 'time_affinity_weight', 2.0),
         )
 
     # Combine multiplicatively with minimum floor to prevent zero collapse
