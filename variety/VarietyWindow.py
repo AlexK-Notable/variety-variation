@@ -3422,7 +3422,10 @@ class VarietyWindow(Gtk.Window):
             )
             try:
                 subprocess.check_call(
-                    [script, wallpaper, auto, original_file, display_mode], timeout=10
+                    [script, wallpaper, auto, original_file, display_mode],
+                    timeout=10,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
             except subprocess.TimeoutExpired:
                 logger.error(lambda: "Timeout while running set_wallpaper script, killed")
