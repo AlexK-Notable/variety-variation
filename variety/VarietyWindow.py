@@ -148,6 +148,7 @@ class VarietyWindow(Gtk.Window):
         self.register_clipboard()
 
         self.do_set_wp_lock = threading.Lock()
+        self._wp_generation = 0  # Generation counter to skip stale wallpaper changes
         self.auto_changed = True
 
         self.process_command(cmdoptions, initial_run=True)
@@ -563,15 +564,16 @@ class VarietyWindow(Gtk.Window):
                                 latest_file = file_path
 
             if latest_file:
-                # Only use if modified in the last 5 seconds (recent wallust run)
+                # Only use if modified in the last 10 seconds (recent wallust run)
+                # Increased from 5s to account for script execution time
                 age = time.time() - latest_time
-                if age < 5.0:
+                if age < 10.0:
                     with open(latest_file, 'r') as f:
                         palette_data = json.load(f)
                     logger.debug(lambda: f"Read wallust palette from {os.path.basename(latest_file)} (age={age:.1f}s)")
                     return palette_data
                 else:
-                    logger.debug(lambda: f"Wallust cache too old ({age:.1f}s > 5s threshold)")
+                    logger.debug(lambda: f"Wallust cache too old ({age:.1f}s > 10s threshold)")
             else:
                 logger.debug(lambda: f"No wallust cache found for palette type '{palette_type}'")
 
@@ -1644,8 +1646,12 @@ class VarietyWindow(Gtk.Window):
 
         self.thumbs_manager.mark_active(file=filename, position=self.position)
 
+        # Increment generation to mark this as the latest request
+        self._wp_generation += 1
+        current_gen = self._wp_generation
+
         def _do_set_wp():
-            self.do_set_wp(filename, refresh_level)
+            self.do_set_wp(filename, refresh_level, generation=current_gen)
 
         threading.Timer(0, _do_set_wp).start()
 
@@ -1915,10 +1921,16 @@ class VarietyWindow(Gtk.Window):
         else:
             return os.path.normpath(option)
 
-    @throttle(seconds=1, trailing_call=True)
-    def do_set_wp(self, filename, refresh_level=RefreshLevel.ALL):
+    def do_set_wp(self, filename, refresh_level=RefreshLevel.ALL, generation=None):
         logger.info(lambda: "Calling do_set_wp with %s, time: %s" % (filename, time.time()))
         with self.do_set_wp_lock:
+            # Skip if a newer wallpaper request has been made while we waited for the lock
+            if generation is not None and generation != self._wp_generation:
+                logger.debug(
+                    lambda: f"Skipping stale wallpaper change (gen {generation}, current {self._wp_generation})"
+                )
+                return
+
             try:
                 if not os.access(filename, os.R_OK):
                     logger.info(
@@ -1946,7 +1958,15 @@ class VarietyWindow(Gtk.Window):
                     to_set = self.apply_quote(to_set)
                     to_set = self.apply_clock(to_set)
 
-                to_set = self.apply_copyto_operation(to_set)
+                # Start copyto in background thread (independent of wallpaper setting)
+                copyto_thread = None
+                if self.options.copyto_enabled:
+                    copyto_thread = threading.Thread(
+                        target=self.apply_copyto_operation,
+                        args=(to_set,),
+                        daemon=True
+                    )
+                    copyto_thread.start()
 
                 self.cleanup_old_wallpapers(self.wallpaper_folder, "wallpaper-", to_set)
 
@@ -1956,6 +1976,13 @@ class VarietyWindow(Gtk.Window):
                 Util.add_mainloop_task(_update_inidicator)
 
                 self.set_desktop_wallpaper(to_set, filename, refresh_level, display_mode_param)
+
+                # Wait for copyto to complete (if started)
+                if copyto_thread:
+                    copyto_thread.join(timeout=5.0)
+                    if copyto_thread.is_alive():
+                        logger.warning("Copyto operation still running after timeout")
+
                 self.current = filename
 
                 # Record for Smart Selection AFTER set_desktop_wallpaper completes
@@ -3390,7 +3417,7 @@ class VarietyWindow(Gtk.Window):
             )
             try:
                 subprocess.check_call(
-                    [script, wallpaper, auto, original_file, display_mode], timeout=10
+                    [script, wallpaper, auto, original_file, display_mode], timeout=5
                 )
             except subprocess.TimeoutExpired:
                 logger.error(lambda: "Timeout while running set_wallpaper script, killed")

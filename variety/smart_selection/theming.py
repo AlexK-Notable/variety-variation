@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple, List, Callable
+from typing import Dict, Any, Optional, Tuple, List, Callable, Set
 
 # TOML parsing - try stdlib first (Python 3.11+), then tomli
 try:
@@ -469,7 +469,7 @@ class ThemeEngine:
     DEBOUNCE_INTERVAL = 0.1
 
     # Reload command timeout in seconds
-    RELOAD_TIMEOUT = 5.0
+    RELOAD_TIMEOUT = 2.0
 
     def __init__(
         self,
@@ -499,6 +499,12 @@ class ThemeEngine:
         self._pending_image: Optional[str] = None
         self._debounce_lock = threading.Lock()
         self._debounce_timer: Optional[threading.Timer] = None
+
+        # Async reload state
+        self._reload_generation: int = 0
+        self._pending_reloads: Set[str] = set()
+        self._reload_lock = threading.Lock()
+        self._reload_thread: Optional[threading.Thread] = None
 
         # Load configurations
         self._templates: List[TemplateConfig] = []
@@ -864,6 +870,51 @@ class ThemeEngine:
         except Exception as e:
             logger.warning(f"Reload command failed for {template_name}: {e}")
 
+    def _run_reload_commands_async(
+        self, reload_commands: List[Tuple[str, str]], generation: int
+    ) -> None:
+        """Run reload commands in background thread with coalescing.
+
+        Args:
+            reload_commands: List of (template_name, command) tuples.
+            generation: Generation counter to detect stale requests.
+        """
+        def runner():
+            for name, command in reload_commands:
+                # Skip if stale (newer wallpaper requested)
+                if generation != self._reload_generation:
+                    logger.debug(f"Skipping stale reload for {name} (gen {generation})")
+                    return
+
+                # Skip if same command already running
+                with self._reload_lock:
+                    if command in self._pending_reloads:
+                        logger.debug(f"Skipping duplicate reload: {command}")
+                        continue
+                    self._pending_reloads.add(command)
+
+                try:
+                    self._run_reload_command(command, name)
+                finally:
+                    with self._reload_lock:
+                        self._pending_reloads.discard(command)
+
+        self._reload_generation += 1
+        self._reload_thread = threading.Thread(target=runner, daemon=True)
+        self._reload_thread.start()
+
+    def shutdown(self, timeout: float = 2.0) -> None:
+        """Wait for pending reload commands on shutdown.
+
+        Args:
+            timeout: Maximum seconds to wait for reloads to complete.
+        """
+        if self._reload_thread and self._reload_thread.is_alive():
+            logger.debug(f"Waiting up to {timeout}s for reload commands...")
+            self._reload_thread.join(timeout=timeout)
+            if self._reload_thread.is_alive():
+                logger.warning("Reload commands still running at shutdown")
+
     def apply(self, image_path: str, debounce: bool = True) -> bool:
         """Apply theme for an image.
 
@@ -972,9 +1023,9 @@ class ThemeEngine:
                 if config.reload_command:
                     reload_commands.append((config.name, config.reload_command))
 
-        # Run reload commands
-        for name, command in reload_commands:
-            self._run_reload_command(command, name)
+        # Run reload commands asynchronously
+        if reload_commands:
+            self._run_reload_commands_async(reload_commands, self._reload_generation)
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(
