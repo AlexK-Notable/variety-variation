@@ -345,6 +345,70 @@ class SmartSelector:
             'unique_shown': self.db.count_shown_images(),
         }
 
+    def get_time_adaptation_status(self) -> Dict[str, Any]:
+        """Get current time adaptation status for UI display.
+
+        Returns:
+            Dictionary with:
+            - enabled: Whether time adaptation is active
+            - period: Current period ('day' or 'night')
+            - target_lightness: Target lightness value (0.0-1.0)
+            - target_temperature: Target temperature (-1.0 to 1.0)
+            - target_saturation: Target saturation (0.0-1.0)
+            - next_transition: Next transition time as string, or None
+            - suitable_count: Number of images suitable for current period
+        """
+        time_adapter = self._selection_engine._time_adapter
+
+        if not self.config.time_adaptation_enabled or not time_adapter:
+            return {
+                'enabled': False,
+                'period': None,
+                'target_lightness': None,
+                'target_temperature': None,
+                'target_saturation': None,
+                'next_transition': None,
+                'suitable_count': 0,
+            }
+
+        try:
+            period = time_adapter.get_current_period()
+            target = time_adapter.get_palette_target()
+            next_trans = time_adapter.get_next_transition()
+
+            # Get suitable image count from time suitability stats
+            time_suit = self.db.get_time_suitability_counts()
+            if period == 'day':
+                suitable_count = time_suit.get('day_suitable', 0)
+            else:
+                suitable_count = time_suit.get('night_suitable', 0)
+
+            # Format next transition
+            next_trans_str = None
+            if next_trans:
+                next_trans_str = next_trans.strftime('%H:%M')
+
+            return {
+                'enabled': True,
+                'period': period,
+                'target_lightness': target.lightness,
+                'target_temperature': target.temperature,
+                'target_saturation': target.saturation,
+                'next_transition': next_trans_str,
+                'suitable_count': suitable_count,
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get time adaptation status: {e}")
+            return {
+                'enabled': True,
+                'period': 'unknown',
+                'target_lightness': None,
+                'target_temperature': None,
+                'target_saturation': None,
+                'next_transition': None,
+                'suitable_count': 0,
+            }
+
     def clear_history(self):
         """Clear selection history (reset times_shown and last_shown_at)."""
         self.db.clear_history()
@@ -390,8 +454,20 @@ class SmartSelector:
         self,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         batch_size: int = 500,
+        parallel: bool = True,
+        max_workers: Optional[int] = None,
     ) -> int:
-        """Extract palettes for all images that don't have them."""
+        """Extract palettes for all images that don't have them.
+
+        Args:
+            progress_callback: Called with (current, total) for progress updates.
+            batch_size: Number of images to process per batch.
+            parallel: Use multi-process parallel extraction (default True).
+            max_workers: Number of parallel workers (default: CPU count, max 16).
+
+        Returns:
+            Number of successfully extracted palettes.
+        """
         if not self._palette_extractor:
             self._palette_extractor = PaletteExtractor()
 
@@ -399,7 +475,14 @@ class SmartSelector:
             logger.warning("wallust is not available for palette extraction")
             return 0
 
+        # Get total count upfront for progress tracking
+        total_to_extract = self.db.count_images_without_palettes()
+        if total_to_extract == 0:
+            logger.info("No images need palette extraction")
+            return 0
+
         extracted_count = 0
+        processed_count = 0
         failed_files: Set[str] = set()
 
         while True:
@@ -409,21 +492,68 @@ class SmartSelector:
             if not images:
                 break
 
-            for image in images:
-                palette_data = self._palette_extractor.extract_palette(image.filepath)
-                if palette_data:
-                    try:
-                        palette_record = create_palette_record(image.filepath, palette_data)
-                        self.db.upsert_palette(palette_record)
-                        extracted_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to store palette for {image.filepath}: {e}")
-                        failed_files.add(image.filepath)
-                else:
-                    failed_files.add(image.filepath)
+            image_paths = [img.filepath for img in images]
 
-                if progress_callback:
-                    progress_callback(extracted_count, -1)
+            if parallel:
+                # Use multi-process parallel extraction
+                def batch_progress(completed: int, total: int) -> None:
+                    """Update progress during batch extraction."""
+                    nonlocal processed_count
+                    if progress_callback:
+                        progress_callback(processed_count + completed, total_to_extract)
+
+                results = self._palette_extractor.extract_palettes_multiprocess(
+                    image_paths,
+                    max_workers=max_workers,
+                    progress_callback=batch_progress
+                )
+
+                # Process results and batch insert to database
+                palette_records = []
+                for filepath, palette_data in results.items():
+                    processed_count += 1
+                    if palette_data:
+                        try:
+                            palette_record = create_palette_record(filepath, palette_data)
+                            palette_records.append(palette_record)
+                            extracted_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to create palette record for {filepath}: {e}")
+                            failed_files.add(filepath)
+                    else:
+                        failed_files.add(filepath)
+
+                # Batch insert palettes to database
+                if palette_records:
+                    try:
+                        self.db.upsert_palettes_batch(palette_records)
+                    except Exception as e:
+                        logger.warning(f"Failed to batch insert palettes: {e}")
+                        # Fall back to individual inserts
+                        for record in palette_records:
+                            try:
+                                self.db.upsert_palette(record)
+                            except Exception:
+                                pass
+            else:
+                # Sequential extraction (original behavior)
+                for image in images:
+                    palette_data = self._palette_extractor.extract_palette(image.filepath)
+                    processed_count += 1
+
+                    if palette_data:
+                        try:
+                            palette_record = create_palette_record(image.filepath, palette_data)
+                            self.db.upsert_palette(palette_record)
+                            extracted_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to store palette for {image.filepath}: {e}")
+                            failed_files.add(image.filepath)
+                    else:
+                        failed_files.add(image.filepath)
+
+                    if progress_callback:
+                        progress_callback(processed_count, total_to_extract)
 
         logger.info(f"Extracted {extracted_count} palettes")
 

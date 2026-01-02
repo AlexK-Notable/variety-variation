@@ -792,6 +792,57 @@ class ImageDatabase:
             indexed_at=row['indexed_at'],
         )
 
+    def upsert_palettes_batch(self, records: List[PaletteRecord]):
+        """Insert or update multiple palette records in a single transaction.
+
+        More efficient than calling upsert_palette() in a loop, especially
+        useful for parallel palette extraction where results arrive in batches.
+
+        Args:
+            records: List of PaletteRecords to upsert.
+        """
+        if not records:
+            return
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.executemany('''
+                INSERT INTO palettes (
+                    filepath, color0, color1, color2, color3, color4, color5, color6, color7,
+                    color8, color9, color10, color11, color12, color13, color14, color15,
+                    background, foreground, cursor, avg_hue, avg_saturation, avg_lightness,
+                    color_temperature, indexed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(filepath) DO UPDATE SET
+                    color0 = excluded.color0, color1 = excluded.color1,
+                    color2 = excluded.color2, color3 = excluded.color3,
+                    color4 = excluded.color4, color5 = excluded.color5,
+                    color6 = excluded.color6, color7 = excluded.color7,
+                    color8 = excluded.color8, color9 = excluded.color9,
+                    color10 = excluded.color10, color11 = excluded.color11,
+                    color12 = excluded.color12, color13 = excluded.color13,
+                    color14 = excluded.color14, color15 = excluded.color15,
+                    background = excluded.background, foreground = excluded.foreground,
+                    cursor = excluded.cursor,
+                    avg_hue = excluded.avg_hue, avg_saturation = excluded.avg_saturation,
+                    avg_lightness = excluded.avg_lightness,
+                    color_temperature = excluded.color_temperature,
+                    indexed_at = excluded.indexed_at
+            ''', [
+                (
+                    r.filepath,
+                    r.color0, r.color1, r.color2, r.color3,
+                    r.color4, r.color5, r.color6, r.color7,
+                    r.color8, r.color9, r.color10, r.color11,
+                    r.color12, r.color13, r.color14, r.color15,
+                    r.background, r.foreground, r.cursor,
+                    r.avg_hue, r.avg_saturation, r.avg_lightness,
+                    r.color_temperature, r.indexed_at,
+                )
+                for r in records
+            ])
+            self.conn.commit()
+
     # =========================================================================
     # Statistics Queries
     # =========================================================================
@@ -827,6 +878,21 @@ class ImageDatabase:
         with self._lock:
             cursor = self.conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM palettes')
+            return cursor.fetchone()[0]
+
+    def count_images_without_palettes(self) -> int:
+        """Count images that don't have palette data.
+
+        Returns:
+            Number of images without associated palette records.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) FROM images i
+                LEFT JOIN palettes p ON i.filepath = p.filepath
+                WHERE p.filepath IS NULL
+            ''')
             return cursor.fetchone()[0]
 
     def sum_times_shown(self) -> int:
@@ -959,6 +1025,45 @@ class ImageDatabase:
                 'moderate': row['moderate'] or 0,
                 'saturated': row['saturated'] or 0,
                 'vibrant': row['vibrant'] or 0,
+            }
+
+    def get_time_suitability_counts(self, day_threshold: float = 0.5, night_threshold: float = 0.5) -> dict:
+        """Get image counts by time-of-day suitability.
+
+        Counts images suitable for day vs night based on lightness.
+        Day-suitable: lightness >= day_threshold
+        Night-suitable: lightness < night_threshold
+
+        Args:
+            day_threshold: Minimum lightness for day suitability (default 0.5)
+            night_threshold: Maximum lightness for night suitability (default 0.5)
+
+        Returns:
+            Dict with 'day_suitable', 'night_suitable', 'both', 'neither' counts.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT
+                    SUM(CASE WHEN avg_lightness >= ? AND avg_lightness >= ? THEN 1 ELSE 0 END) as day_only,
+                    SUM(CASE WHEN avg_lightness < ? AND avg_lightness < ? THEN 1 ELSE 0 END) as night_only,
+                    SUM(CASE WHEN avg_lightness >= ? AND avg_lightness < ? THEN 1 ELSE 0 END) as both_suitable,
+                    SUM(CASE WHEN avg_lightness < ? AND avg_lightness >= ? THEN 1 ELSE 0 END) as neither
+                FROM palettes
+            ''', (day_threshold, night_threshold, night_threshold, day_threshold,
+                  night_threshold, day_threshold, day_threshold, night_threshold))
+            row = cursor.fetchone()
+            # Simplify: day-suitable = lightness >= 0.5, night-suitable = lightness < 0.5
+            cursor.execute('''
+                SELECT
+                    SUM(CASE WHEN avg_lightness >= ? THEN 1 ELSE 0 END) as day_suitable,
+                    SUM(CASE WHEN avg_lightness < ? THEN 1 ELSE 0 END) as night_suitable
+                FROM palettes
+            ''', (day_threshold, night_threshold))
+            row = cursor.fetchone()
+            return {
+                'day_suitable': row['day_suitable'] or 0,
+                'night_suitable': row['night_suitable'] or 0,
             }
 
     def get_freshness_counts(self) -> dict:

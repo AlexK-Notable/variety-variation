@@ -71,6 +71,7 @@ class CollectionStatistics:
             self._cache['hue'] = self.db.get_hue_counts()
             self._cache['saturation'] = self.db.get_saturation_counts()
             self._cache['freshness'] = self.db.get_freshness_counts()
+            self._cache['time_suitability'] = self.db.get_time_suitability_counts()
             self._cache_valid = True
         logger.debug("Statistics cache populated")
 
@@ -154,6 +155,23 @@ class CollectionStatistics:
         self._ensure_cache_populated()
         with self._lock:
             return self._cache['freshness'].copy()
+
+    def get_time_suitability(self) -> Dict[str, int]:
+        """Get image counts by time-of-day suitability.
+
+        Uses lightness threshold of 0.5 to classify:
+        - day_suitable: Images with avg_lightness >= 0.5 (brighter)
+        - night_suitable: Images with avg_lightness < 0.5 (darker)
+
+        Thread-safe: cache access protected by lock.
+
+        Returns:
+            Dict with 'day_suitable' and 'night_suitable' counts.
+            Example: {'day_suitable': 650, 'night_suitable': 236}
+        """
+        self._ensure_cache_populated()
+        with self._lock:
+            return self._cache['time_suitability'].copy()
 
     def get_gaps(self) -> List[str]:
         """Identify underrepresented categories in the collection.
@@ -301,6 +319,7 @@ class CollectionStatistics:
         hue_dist = self.get_hue_distribution()
         saturation_dist = self.get_saturation_distribution()
         freshness_dist = self.get_freshness_distribution()
+        time_suitability = self.get_time_suitability()
 
         # Get counts
         total_images = self.db.count_images()
@@ -312,6 +331,16 @@ class CollectionStatistics:
         saturation_summary = self._generate_summary('saturation', saturation_dist)
         freshness_summary = self._generate_summary('freshness', freshness_dist)
 
+        # Generate time suitability summary
+        day_count = time_suitability.get('day_suitable', 0)
+        night_count = time_suitability.get('night_suitable', 0)
+        if total_with_palettes > 0:
+            day_pct = int(day_count / total_with_palettes * 100)
+            night_pct = int(night_count / total_with_palettes * 100)
+            time_summary = f"{day_count} day ({day_pct}%) · {night_count} night ({night_pct}%)"
+        else:
+            time_summary = "No palette data"
+
         # Get gaps
         gaps = self.get_gaps()
 
@@ -322,9 +351,11 @@ class CollectionStatistics:
             'hue_distribution': hue_dist,
             'saturation_distribution': saturation_dist,
             'freshness_distribution': freshness_dist,
+            'time_suitability': time_suitability,
             'lightness_summary': lightness_summary,
             'hue_summary': hue_summary,
             'saturation_summary': saturation_summary,
             'freshness_summary': freshness_summary,
+            'time_suitability_summary': time_summary,
             'gaps': gaps,
         }

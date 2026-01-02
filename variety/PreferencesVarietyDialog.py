@@ -2081,7 +2081,7 @@ class PreferencesVarietyDialog(PreferencesDialog):
             title_label = Gtk.Label()
             title_label.set_markup("<b>{}</b>".format(_("Collection Insights")))
             title_label.set_halign(Gtk.Align.START)
-            header_box.pack_start(title_label, True, True, 0)
+            header_box.pack_start(title_label, False, True, 0)
 
             # Refresh button
             refresh_button = Gtk.Button(label=_("Refresh"))
@@ -2098,8 +2098,9 @@ class PreferencesVarietyDialog(PreferencesDialog):
             # Store references to expanders for updating
             self.insights_expanders = {}
 
-            # Create 4 expandable insight cards
+            # Create 5 expandable insight cards
             categories = [
+                ('time_adaptation', _("Time Adaptation"), "preferences-system-time-symbolic"),
                 ('lightness', _("Lightness Balance"), "weather-clear-symbolic"),
                 ('hue', _("Color Palette"), "preferences-color-symbolic"),
                 ('saturation', _("Saturation Levels"), "view-continuous-symbolic"),
@@ -2229,6 +2230,62 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
             gaps = stats.get('gaps', [])
 
+            # Update time adaptation category separately (uses different data source)
+            if 'time_adaptation' in self.insights_expanders:
+                refs = self.insights_expanders['time_adaptation']
+                try:
+                    time_status = self.parent.smart_selector.get_time_adaptation_status()
+                    if time_status.get('enabled'):
+                        period = time_status.get('period', 'unknown')
+                        period_display = _("Day") if period == 'day' else _("Night")
+                        suitable = time_status.get('suitable_count', 0)
+                        next_trans = time_status.get('next_transition')
+                        target_l = time_status.get('target_lightness')
+
+                        # Summary: Current mode and suitable count
+                        summary = _("Currently: {} · {} suitable wallpapers").format(
+                            period_display, suitable
+                        )
+                        refs['summary'].set_text(summary)
+
+                        # Detailed content
+                        content_lines = [
+                            _("Current period: {}").format(period_display),
+                            _("Suitable wallpapers: {}").format(suitable),
+                        ]
+                        if target_l is not None:
+                            content_lines.append(_("Target lightness: {:.0%}").format(target_l))
+                        if next_trans:
+                            next_period = _("Day") if period == 'night' else _("Night")
+                            content_lines.append(_("Next transition: {} at {}").format(
+                                next_period, next_trans
+                            ))
+
+                        # Add time suitability breakdown
+                        time_suit = stats.get('time_suitability', {})
+                        day_count = time_suit.get('day_suitable', 0)
+                        night_count = time_suit.get('night_suitable', 0)
+                        content_lines.append("")
+                        content_lines.append(_("Collection breakdown:"))
+                        content_lines.append(_("  Day-suitable (bright): {}").format(day_count))
+                        content_lines.append(_("  Night-suitable (dark): {}").format(night_count))
+
+                        refs['content'].set_text("\n".join(content_lines))
+
+                        # Set icon based on period
+                        if period == 'night':
+                            refs['icon'].set_from_icon_name("weather-clear-night-symbolic", Gtk.IconSize.MENU)
+                        else:
+                            refs['icon'].set_from_icon_name("weather-clear-symbolic", Gtk.IconSize.MENU)
+                    else:
+                        refs['summary'].set_text(_("Disabled"))
+                        refs['content'].set_text(_("Enable Time Adaptation above to adjust wallpaper selection based on time of day."))
+                        refs['icon'].set_from_icon_name("preferences-system-time-symbolic", Gtk.IconSize.MENU)
+                except Exception as e:
+                    logger.debug(f"Failed to update time adaptation insight: {e}")
+                    refs['summary'].set_text(_("Not available"))
+                    refs['content'].set_text(_("Time adaptation status could not be determined."))
+
             for category_id, category_info in categories.items():
                 if category_id not in self.insights_expanders:
                     continue
@@ -2250,12 +2307,13 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 else:
                     # Restore default icon
                     icon_names = {
+                        'time_adaptation': "preferences-system-time-symbolic",
                         'lightness': "weather-clear-symbolic",
                         'hue': "preferences-color-symbolic",
                         'saturation': "view-continuous-symbolic",
                         'freshness': "document-new-symbolic",
                     }
-                    refs['icon'].set_from_icon_name(icon_names[category_id], Gtk.IconSize.MENU)
+                    refs['icon'].set_from_icon_name(icon_names.get(category_id, "dialog-question-symbolic"), Gtk.IconSize.MENU)
 
                 refs['summary'].set_text(summary_text)
 
@@ -2346,6 +2404,25 @@ class PreferencesVarietyDialog(PreferencesDialog):
             if response != Gtk.ResponseType.YES:
                 return
 
+            # Show progress UI
+            self.ui.smart_rebuild_index.set_sensitive(False)
+            self.ui.smart_rebuild_progress_box.set_visible(True)
+            self.ui.smart_rebuild_progress.set_fraction(0.0)
+            self.ui.smart_rebuild_progress.set_text(_("Starting..."))
+
+            def progress_callback(current, total):
+                """Update progress bar with rebuild progress."""
+                def _update():
+                    if total > 0:
+                        fraction = current / total
+                        self.ui.smart_rebuild_progress.set_fraction(fraction)
+                        self.ui.smart_rebuild_progress.set_text(
+                            _("Scanning folder {current} / {total}").format(
+                                current=current, total=total
+                            )
+                        )
+                Util.add_mainloop_task(_update)
+
             def rebuild():
                 try:
                     # Collect all source folders
@@ -2353,14 +2430,37 @@ class PreferencesVarietyDialog(PreferencesDialog):
                     favorites_folder = self.parent.options.favorites_folder
                     self.parent.smart_selector.rebuild_index(
                         source_folders=folders,
-                        favorites_folder=favorites_folder
+                        favorites_folder=favorites_folder,
+                        progress_callback=progress_callback
                     )
-                    Util.add_mainloop_task(self.update_smart_selection_stats)
+
+                    # Get final counts for completion message
+                    stats = self.parent.smart_selector.get_statistics()
+                    images_count = stats.get('images_indexed', 0)
+                    sources_count = stats.get('sources_count', 0)
+
+                    def _on_success():
+                        self.update_smart_selection_stats()
+                        self.parent.show_notification(
+                            _("Index rebuilt: {images} images from {sources} sources").format(
+                                images=images_count, sources=sources_count
+                            )
+                        )
+                    Util.add_mainloop_task(_on_success)
+
                 except Exception:
                     logger.exception(lambda: "Error rebuilding smart selection index")
+                    def _on_error():
+                        self.parent.show_notification(_("Index rebuild failed"))
+                    Util.add_mainloop_task(_on_error)
+
+                finally:
+                    def _restore():
+                        self.ui.smart_rebuild_progress_box.set_visible(False)
+                        self.ui.smart_rebuild_index.set_sensitive(True)
+                    Util.add_mainloop_task(_restore)
 
             threading.Thread(target=rebuild, daemon=True).start()
-            self.parent.show_notification(_("Rebuilding index..."))
 
     def _get_all_source_folders(self):
         """Get all enabled source folders for indexing."""
