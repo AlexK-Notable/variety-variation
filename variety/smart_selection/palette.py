@@ -15,13 +15,17 @@ import subprocess
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count
 from typing import Callable, Dict, Any, List, Optional, Tuple
 
 from variety.smart_selection.models import PaletteRecord
 from variety.smart_selection.wallust_config import get_config_manager
 
 logger = logging.getLogger(__name__)
+
+# Default number of parallel workers - set aggressively for modern hardware
+DEFAULT_PARALLEL_WORKERS = min(cpu_count(), 16)
 
 
 def hex_to_hsl(hex_color: str) -> Tuple[float, float, float]:
@@ -270,6 +274,86 @@ def parse_wallust_json(json_data) -> Dict[str, Any]:
     return result
 
 
+def _extract_palette_isolated(args: Tuple[str, str, str]) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Extract palette in an isolated cache environment (process-safe).
+
+    This function is designed to be called from ProcessPoolExecutor.
+    Each call uses an isolated temporary cache directory to avoid
+    race conditions with parallel wallust processes.
+
+    Args:
+        args: Tuple of (image_path, wallust_path, palette_type)
+
+    Returns:
+        Tuple of (image_path, palette_data or None)
+    """
+    image_path, wallust_path, palette_type = args
+
+    if not os.path.exists(image_path):
+        return (image_path, None)
+
+    if not wallust_path:
+        return (image_path, None)
+
+    # Create isolated temp cache directory for this process
+    temp_cache_dir = tempfile.mkdtemp(prefix='wallust_cache_')
+
+    try:
+        # Run wallust with isolated cache via XDG_CACHE_HOME
+        env = os.environ.copy()
+        env['XDG_CACHE_HOME'] = temp_cache_dir
+
+        result = subprocess.run(
+            [
+                wallust_path, 'run',
+                '-s',  # Skip terminal sequences
+                '-T',  # Skip templates
+                '-q',  # Quiet
+                '--backend', 'fastresize',
+                image_path,
+            ],
+            capture_output=True,
+            timeout=30,
+            env=env,
+        )
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode('utf-8', errors='replace')
+            if 'Not enough colors' not in stderr:
+                # Only log non-trivial errors
+                pass  # Can't use logger in subprocess easily
+            return (image_path, None)
+
+        # Read from isolated cache
+        wallust_cache = os.path.join(temp_cache_dir, 'wallust')
+        if not os.path.isdir(wallust_cache):
+            return (image_path, None)
+
+        # Find the palette file - should be the only entry in isolated cache
+        for entry in os.listdir(wallust_cache):
+            entry_path = os.path.join(wallust_cache, entry)
+            if os.path.isdir(entry_path):
+                for subfile in os.listdir(entry_path):
+                    if palette_type in subfile:
+                        filepath = os.path.join(entry_path, subfile)
+                        with open(filepath, 'r') as f:
+                            json_data = json.load(f)
+                        return (image_path, parse_wallust_json(json_data))
+
+        return (image_path, None)
+
+    except subprocess.TimeoutExpired:
+        return (image_path, None)
+    except Exception:
+        return (image_path, None)
+    finally:
+        # Clean up temp cache directory
+        try:
+            shutil.rmtree(temp_cache_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 class PaletteExtractor:
     """Extracts color palettes from images using wallust."""
 
@@ -311,6 +395,69 @@ class PaletteExtractor:
             Palette type string like 'Dark16', 'Light16', etc.
         """
         return get_config_manager().get_palette_type()
+
+    def _find_raw_palette(self, themed_file: str) -> Optional[str]:
+        """Find the raw palette file corresponding to a themed palette file.
+
+        The raw file contains colors before theme adjustment (Dark16/Light16).
+        For example: FastResize_Lch_5_Dark16 -> FastResize_Lch_5
+
+        Args:
+            themed_file: Path to the themed palette file (e.g., *_Dark16)
+
+        Returns:
+            Path to raw palette file, or None if not found.
+        """
+        import re
+        directory = os.path.dirname(themed_file)
+
+        # Pattern: remove the theme suffix (e.g., _Dark16, _Light16, _HardDark16)
+        # The raw file ends with the color space and threshold (e.g., _Lch_5, _Lch_auto)
+        theme_suffixes = ['_Dark16', '_Light16', '_HardDark16', '_AnsiDark16', '_SoftDark16']
+
+        for suffix in theme_suffixes:
+            if themed_file.endswith(suffix):
+                raw_base = themed_file[:-len(suffix)]
+                if os.path.exists(raw_base):
+                    return raw_base
+                break
+
+        return None
+
+    def _calculate_raw_lightness(self, raw_data) -> Optional[float]:
+        """Calculate average lightness from raw wallust palette data.
+
+        The raw data is a list of palettes, each containing RGB dicts with
+        0-1 float values representing the actual extracted image colors.
+
+        Args:
+            raw_data: List of palettes from wallust cache (before theme mapping).
+
+        Returns:
+            Average lightness (0.0-1.0) or None if calculation fails.
+        """
+        if not isinstance(raw_data, list) or len(raw_data) == 0:
+            return None
+
+        first_palette = raw_data[0]
+        if not isinstance(first_palette, list) or len(first_palette) == 0:
+            return None
+
+        lightnesses = []
+        for rgb in first_palette[:16]:  # Use up to 16 colors
+            if isinstance(rgb, dict) and 'red' in rgb and 'green' in rgb and 'blue' in rgb:
+                r = rgb.get('red', 0)
+                g = rgb.get('green', 0)
+                b = rgb.get('blue', 0)
+                # HSL lightness = (max + min) / 2
+                max_c = max(r, g, b)
+                min_c = min(r, g, b)
+                lightness = (max_c + min_c) / 2.0
+                lightnesses.append(lightness)
+
+        if lightnesses:
+            return sum(lightnesses) / len(lightnesses)
+        return None
 
     def extract_palette(self, image_path: str) -> Optional[Dict[str, Any]]:
         """Extract color palette from an image using wallust.
@@ -416,7 +563,24 @@ class PaletteExtractor:
             if latest_file:
                 with open(latest_file, 'r') as f:
                     json_data = json.load(f)
-                return parse_wallust_json(json_data)
+                result = parse_wallust_json(json_data)
+
+                # IMPORTANT: The themed palette (Dark16/Light16) has artificially
+                # adjusted colors for terminal readability. For time-based selection,
+                # we need the TRUE image lightness from the raw extracted colors.
+                # Find and read the raw palette file (e.g., *_Lch_5 without Dark16)
+                raw_palette_file = self._find_raw_palette(latest_file)
+                if raw_palette_file:
+                    try:
+                        with open(raw_palette_file, 'r') as f:
+                            raw_data = json.load(f)
+                        raw_lightness = self._calculate_raw_lightness(raw_data)
+                        if raw_lightness is not None:
+                            result['avg_lightness'] = raw_lightness
+                    except Exception as e:
+                        logger.debug(f"Could not read raw palette: {e}")
+
+                return result
 
             logger.warning(f"wallust did not produce cached output for {image_path}")
             return None
@@ -542,6 +706,90 @@ class PaletteExtractor:
             self._executor.shutdown(wait=False)
             self._executor = None
 
+    def extract_palettes_multiprocess(
+        self,
+        images: List[str],
+        max_workers: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Extract palettes using multiple processes (true parallelism).
+
+        This uses ProcessPoolExecutor with isolated cache directories for
+        each worker, ensuring reliable parallel extraction without race
+        conditions. Best for large batch extractions on multi-core systems.
+
+        Args:
+            images: List of image paths to process.
+            max_workers: Number of parallel processes (default: CPU count, max 16).
+            progress_callback: Called with (completed, total) for progress updates.
+
+        Returns:
+            Dict mapping filepath to palette data (or None if failed).
+        """
+        if not images:
+            return {}
+
+        if not self.wallust_path:
+            logger.warning("wallust not available for palette extraction")
+            return {path: None for path in images}
+
+        workers = max_workers or DEFAULT_PARALLEL_WORKERS
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        total = len(images)
+        completed = 0
+
+        # Reset shutdown event
+        self._shutdown_event.clear()
+
+        # Get palette type once (it's cached)
+        palette_type = self._get_palette_type()
+
+        # Prepare args for each image
+        args_list = [(path, self.wallust_path, palette_type) for path in images]
+
+        logger.info(f"Starting parallel palette extraction: {total} images, {workers} workers")
+
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                # Submit all tasks
+                future_to_path = {
+                    executor.submit(_extract_palette_isolated, args): args[0]
+                    for args in args_list
+                }
+
+                # Process results as they complete
+                for future in as_completed(future_to_path):
+                    if self._shutdown_event.is_set():
+                        # Cancel remaining futures
+                        for f in future_to_path:
+                            f.cancel()
+                        break
+
+                    try:
+                        path, palette_data = future.result(timeout=60)
+                        results[path] = palette_data
+                    except Exception as e:
+                        path = future_to_path[future]
+                        logger.warning(f"Failed to get result for {path}: {e}")
+                        results[path] = None
+
+                    completed += 1
+                    if progress_callback:
+                        progress_callback(completed, total)
+
+        except Exception as e:
+            logger.exception(f"Error in parallel palette extraction: {e}")
+
+        # Fill in any missing results
+        for path in images:
+            if path not in results:
+                results[path] = None
+
+        successful = sum(1 for v in results.values() if v is not None)
+        logger.info(f"Parallel extraction complete: {successful}/{total} successful")
+
+        return results
+
 
 def create_palette_record(filepath: str, palette_data: Dict[str, Any]) -> PaletteRecord:
     """Create a PaletteRecord from extracted palette data.
@@ -606,27 +854,27 @@ def palette_similarity_hsl(palette1: Dict[str, Any], palette2: Dict[str, Any]) -
     if not palette1 or not palette2:
         return 0.0
 
-    # Hue similarity (circular)
-    hue1 = palette1.get('avg_hue', 0)
-    hue2 = palette2.get('avg_hue', 0)
+    # Hue similarity (circular) - use 'or' to handle None values
+    hue1 = palette1.get('avg_hue') if palette1.get('avg_hue') is not None else 0
+    hue2 = palette2.get('avg_hue') if palette2.get('avg_hue') is not None else 0
     hue_diff = abs(hue1 - hue2)
     if hue_diff > 180:
         hue_diff = 360 - hue_diff
     hue_similarity = 1 - (hue_diff / 180.0)
 
-    # Saturation similarity
-    sat1 = palette1.get('avg_saturation', 0.5)
-    sat2 = palette2.get('avg_saturation', 0.5)
+    # Saturation similarity - use 'or' to handle None values
+    sat1 = palette1.get('avg_saturation') if palette1.get('avg_saturation') is not None else 0.5
+    sat2 = palette2.get('avg_saturation') if palette2.get('avg_saturation') is not None else 0.5
     sat_similarity = 1 - abs(sat1 - sat2)
 
-    # Lightness similarity
-    light1 = palette1.get('avg_lightness', 0.5)
-    light2 = palette2.get('avg_lightness', 0.5)
+    # Lightness similarity - use 'or' to handle None values
+    light1 = palette1.get('avg_lightness') if palette1.get('avg_lightness') is not None else 0.5
+    light2 = palette2.get('avg_lightness') if palette2.get('avg_lightness') is not None else 0.5
     light_similarity = 1 - abs(light1 - light2)
 
-    # Temperature similarity
-    temp1 = palette1.get('color_temperature', 0)
-    temp2 = palette2.get('color_temperature', 0)
+    # Temperature similarity - use 'or' to handle None values
+    temp1 = palette1.get('color_temperature') if palette1.get('color_temperature') is not None else 0
+    temp2 = palette2.get('color_temperature') if palette2.get('color_temperature') is not None else 0
     temp_similarity = 1 - (abs(temp1 - temp2) / 2.0)  # Range is -1 to 1
 
     # Weighted average (hue and lightness are most perceptually important)
