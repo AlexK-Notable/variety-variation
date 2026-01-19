@@ -446,7 +446,7 @@ class TestCalculateTimeAffinity(unittest.TestCase):
         self.assertEqual(affinity, 1.0)
 
     def test_returns_boost_for_perfect_match(self):
-        """Returns 1.5 for perfect palette match."""
+        """Returns max boost (3.0 at strength=2.0) for perfect palette match."""
         from variety.smart_selection.weights import calculate_time_affinity
         from variety.smart_selection.models import PaletteRecord
 
@@ -463,10 +463,11 @@ class TestCalculateTimeAffinity(unittest.TestCase):
             target_temperature=0.0,
             target_saturation=0.5,
         )
-        self.assertEqual(affinity, 1.5)
+        # At strength=2.0 (default): max_mult = 1.0 + strength = 3.0
+        self.assertEqual(affinity, 3.0)
 
     def test_returns_penalty_for_poor_match(self):
-        """Returns 0.5 for poor palette match beyond tolerance."""
+        """Returns min penalty (~0.33 at strength=2.0) for poor palette match."""
         from variety.smart_selection.weights import calculate_time_affinity
         from variety.smart_selection.models import PaletteRecord
 
@@ -486,7 +487,8 @@ class TestCalculateTimeAffinity(unittest.TestCase):
             target_saturation=0.3,
             tolerance=0.3,
         )
-        self.assertEqual(affinity, 0.5)
+        # At strength=2.0 (default): min_mult = 1.0 / (1.0 + strength) = 0.333...
+        self.assertAlmostEqual(affinity, 0.333, places=2)
 
     def test_returns_intermediate_for_partial_match(self):
         """Returns intermediate value for partial match."""
@@ -508,9 +510,10 @@ class TestCalculateTimeAffinity(unittest.TestCase):
             target_saturation=0.5,
             tolerance=0.3,
         )
-        # Should be between 0.5 and 1.5
-        self.assertGreater(affinity, 0.5)
-        self.assertLess(affinity, 1.5)
+        # At strength=2.0: range is 0.33 to 3.0
+        # Should be between min and max, but not at extremes
+        self.assertGreater(affinity, 0.33)
+        self.assertLess(affinity, 3.0)
 
     def test_lightness_weighted_more_heavily(self):
         """Lightness differences have more impact than other dimensions."""
@@ -578,7 +581,7 @@ class TestCalculateTimeAffinity(unittest.TestCase):
         self.assertGreater(affinity_loose, affinity_strict)
 
     def test_clamped_to_valid_range(self):
-        """Affinity is always between 0.5 and 1.5."""
+        """Affinity is always between min (0.33) and max (3.0) at strength=2.0."""
         from variety.smart_selection.weights import calculate_time_affinity
         from variety.smart_selection.models import PaletteRecord
 
@@ -592,8 +595,9 @@ class TestCalculateTimeAffinity(unittest.TestCase):
         affinity_perfect = calculate_time_affinity(
             perfect_palette, 0.5, 0.0, 0.5
         )
-        self.assertLessEqual(affinity_perfect, 1.5)
-        self.assertGreaterEqual(affinity_perfect, 0.5)
+        # At strength=2.0: range is 0.33 to 3.0
+        self.assertLessEqual(affinity_perfect, 3.0)
+        self.assertGreaterEqual(affinity_perfect, 0.33)
 
         # Test extreme mismatch
         opposite_palette = PaletteRecord(
@@ -605,8 +609,8 @@ class TestCalculateTimeAffinity(unittest.TestCase):
         affinity_opposite = calculate_time_affinity(
             opposite_palette, 0.0, -1.0, 0.0
         )
-        self.assertLessEqual(affinity_opposite, 1.5)
-        self.assertGreaterEqual(affinity_opposite, 0.5)
+        self.assertLessEqual(affinity_opposite, 3.0)
+        self.assertGreaterEqual(affinity_opposite, 0.33)
 
     def test_handles_none_palette_metrics(self):
         """Handles palette with None values by using neutral defaults."""
@@ -628,9 +632,9 @@ class TestCalculateTimeAffinity(unittest.TestCase):
             target_temperature=0.0,
             target_saturation=0.5,
         )
-        # Should return a valid value based on neutral defaults
-        self.assertGreaterEqual(affinity, 0.5)
-        self.assertLessEqual(affinity, 1.5)
+        # Should return a valid value within the strength=2.0 range (0.33 to 3.0)
+        self.assertGreaterEqual(affinity, 0.33)
+        self.assertLessEqual(affinity, 3.0)
 
 
 class TestTimeAffinityInCalculateWeight(unittest.TestCase):

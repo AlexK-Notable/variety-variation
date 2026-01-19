@@ -15,7 +15,6 @@ import math
 import os
 import random
 import logging
-from datetime import datetime
 from typing import List, Optional, Dict, Any, Callable, Set, TYPE_CHECKING
 
 from variety.smart_selection.database import ImageDatabase
@@ -561,36 +560,6 @@ class SmartSelector:
             self._statistics.invalidate()
 
         return extracted_count
-
-    # =========================================================================
-    # Time-Based Selection Methods
-    # =========================================================================
-
-    def get_time_based_temperature(self) -> float:
-        """Get target color temperature based on current time."""
-        hour = datetime.now().hour
-
-        if 6 <= hour < 12:      # Morning
-            return 0.3  # Cool/bright
-        elif 12 <= hour < 18:   # Afternoon
-            return 0.5  # Neutral
-        elif 18 <= hour < 22:   # Evening
-            return 0.7  # Warm/cozy
-        else:                   # Night (22-6)
-            return 0.4  # Neutral-dark
-
-    def get_time_period(self) -> str:
-        """Get the current time period name."""
-        hour = datetime.now().hour
-
-        if 6 <= hour < 12:
-            return 'morning'
-        elif 12 <= hour < 18:
-            return 'afternoon'
-        elif 18 <= hour < 22:
-            return 'evening'
-        else:
-            return 'night'
 
     # =========================================================================
     # Preview Methods

@@ -1239,5 +1239,181 @@ class TestDatabaseBackup(unittest.TestCase):
         db.close()
 
 
+class TestMigrationIdempotency(unittest.TestCase):
+    """Tests for database migration idempotency.
+
+    Migrations must be safe to run multiple times without error.
+    """
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _create_v1_schema(self):
+        """Create a v1 schema database directly."""
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        # V1 schema - palettes table without cursor column
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS images (
+                filepath TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                source_id TEXT,
+                is_favorite BOOLEAN DEFAULT FALSE,
+                rating INTEGER DEFAULT 0,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_shown_at TIMESTAMP,
+                shown_count INTEGER DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS palettes (
+                filepath TEXT PRIMARY KEY,
+                color0 TEXT, color1 TEXT, color2 TEXT, color3 TEXT,
+                color4 TEXT, color5 TEXT, color6 TEXT, color7 TEXT,
+                color8 TEXT, color9 TEXT, color10 TEXT, color11 TEXT,
+                color12 TEXT, color13 TEXT, color14 TEXT, color15 TEXT,
+                avg_hue REAL, avg_saturation REAL, avg_lightness REAL,
+                color_temperature REAL,
+                extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (filepath) REFERENCES images(filepath)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sources (
+                source_id TEXT PRIMARY KEY,
+                source_type TEXT,
+                source_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_shown_at TIMESTAMP
+            )
+        ''')
+        cursor.execute('PRAGMA user_version = 1')
+        conn.commit()
+        conn.close()
+
+    def _create_v2_schema(self):
+        """Create a v2 schema database directly."""
+        import sqlite3
+        self._create_v1_schema()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        # V2 adds cursor column to palettes
+        cursor.execute('ALTER TABLE palettes ADD COLUMN cursor TEXT')
+        cursor.execute('PRAGMA user_version = 2')
+        conn.commit()
+        conn.close()
+
+    def _create_v3_schema(self):
+        """Create a v3 schema database directly."""
+        import sqlite3
+        self._create_v2_schema()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        # V3 adds palette_status to images and index
+        cursor.execute("ALTER TABLE images ADD COLUMN palette_status TEXT DEFAULT 'pending'")
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_palette_status ON images(palette_status)')
+        cursor.execute('PRAGMA user_version = 3')
+        conn.commit()
+        conn.close()
+
+    def test_v1_to_v2_migration_idempotent(self):
+        """Running v1→v2 migration twice doesn't fail."""
+        from variety.smart_selection.database import ImageDatabase
+
+        self._create_v1_schema()
+
+        # First migration via opening database (auto-migrates)
+        db1 = ImageDatabase(self.db_path)
+        db1.close()
+
+        # Open again - should handle already-migrated database
+        db2 = ImageDatabase(self.db_path)
+        # Verify cursor column exists
+        cursor = db2.conn.cursor()
+        cursor.execute("PRAGMA table_info(palettes)")
+        columns = [row[1] for row in cursor.fetchall()]
+        self.assertIn('cursor', columns)
+        db2.close()
+
+    def test_v2_to_v3_migration_idempotent(self):
+        """Running v2→v3 migration twice doesn't fail."""
+        from variety.smart_selection.database import ImageDatabase
+
+        self._create_v2_schema()
+
+        # First migration via opening database
+        db1 = ImageDatabase(self.db_path)
+        db1.close()
+
+        # Open again - should handle already-migrated database
+        db2 = ImageDatabase(self.db_path)
+        # Verify palette_status column exists
+        cursor = db2.conn.cursor()
+        cursor.execute("PRAGMA table_info(images)")
+        columns = [row[1] for row in cursor.fetchall()]
+        self.assertIn('palette_status', columns)
+        db2.close()
+
+    def test_v3_to_v4_migration_idempotent(self):
+        """Running v3→v4 migration twice doesn't fail."""
+        from variety.smart_selection.database import ImageDatabase
+
+        self._create_v3_schema()
+
+        # First migration via opening database
+        db1 = ImageDatabase(self.db_path)
+        db1.close()
+
+        # Open again - should handle already-migrated database
+        db2 = ImageDatabase(self.db_path)
+        # Verify compound index exists
+        cursor = db2.conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_palettes_color_filter'")
+        result = cursor.fetchone()
+        self.assertIsNotNone(result)
+        db2.close()
+
+    def test_full_migration_chain_idempotent(self):
+        """Running full migration chain twice doesn't fail."""
+        from variety.smart_selection.database import ImageDatabase
+
+        self._create_v1_schema()
+
+        # First full migration
+        db1 = ImageDatabase(self.db_path)
+        db1.close()
+
+        # Second open - all migrations already applied
+        db2 = ImageDatabase(self.db_path)
+
+        # Verify all migrations applied
+        cursor = db2.conn.cursor()
+
+        # V2: cursor column in palettes
+        cursor.execute("PRAGMA table_info(palettes)")
+        palette_columns = [row[1] for row in cursor.fetchall()]
+        self.assertIn('cursor', palette_columns)
+
+        # V3: palette_status column in images
+        cursor.execute("PRAGMA table_info(images)")
+        image_columns = [row[1] for row in cursor.fetchall()]
+        self.assertIn('palette_status', image_columns)
+
+        # V4: compound index
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_palettes_color_filter'")
+        self.assertIsNotNone(cursor.fetchone())
+
+        db2.close()
+
+
 if __name__ == '__main__':
     unittest.main()

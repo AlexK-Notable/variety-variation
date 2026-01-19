@@ -17,6 +17,7 @@ The OKLAB color space uses three components:
 """
 
 import math
+from functools import lru_cache
 from typing import Dict, Any, List, Optional, Tuple
 
 
@@ -113,8 +114,12 @@ def oklab_distance(lab1: Tuple[float, float, float],
     return math.sqrt(dL * dL + da * da + db * db)
 
 
+@lru_cache(maxsize=1024)
 def hex_to_oklab(hex_color: str) -> Tuple[float, float, float]:
     """Convert hex color string to OKLAB.
+
+    Results are cached since the same colors appear frequently across palettes.
+    Cache size of 1024 covers common terminal/theme colors plus ~64 palettes.
 
     Args:
         hex_color: Hex color string like "#FF0000" or "ff0000".

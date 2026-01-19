@@ -34,7 +34,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 4
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -73,7 +73,8 @@ class ImageDatabase:
                     first_indexed_at INTEGER,
                     last_indexed_at INTEGER,
                     last_shown_at INTEGER,
-                    times_shown INTEGER DEFAULT 0
+                    times_shown INTEGER DEFAULT 0,
+                    palette_status TEXT DEFAULT 'pending'
                 )
             ''')
 
@@ -112,6 +113,18 @@ class ImageDatabase:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_favorite ON images(is_favorite)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_palettes_lightness ON palettes(avg_lightness)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_palettes_temperature ON palettes(color_temperature)')
+
+            # These indexes depend on columns added by migrations.
+            # Check if columns exist before creating to support old databases.
+            cursor.execute("PRAGMA table_info(images)")
+            image_columns = [row[1] for row in cursor.fetchall()]
+            if 'palette_status' in image_columns:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_palette_status ON images(palette_status)')
+
+            cursor.execute("PRAGMA table_info(palettes)")
+            palette_columns = [row[1] for row in cursor.fetchall()]
+            if all(col in palette_columns for col in ['avg_lightness', 'color_temperature', 'avg_saturation']):
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_palettes_color_filter ON palettes(avg_lightness, color_temperature, avg_saturation)')
 
             # Schema info table for tracking version
             cursor.execute('''
@@ -180,6 +193,8 @@ class ImageDatabase:
         # Migration map: version -> migration function
         migrations = {
             2: self._migrate_v1_to_v2,
+            3: self._migrate_v2_to_v3,
+            4: self._migrate_v3_to_v4,
         }
 
         with self._lock:
@@ -203,8 +218,51 @@ class ImageDatabase:
         Adds cursor column to palettes table for theming engine support.
         """
         cursor = self.conn.cursor()
-        cursor.execute('ALTER TABLE palettes ADD COLUMN cursor TEXT')
+        # Check if column already exists (idempotent migration)
+        cursor.execute("PRAGMA table_info(palettes)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'cursor' not in columns:
+            cursor.execute('ALTER TABLE palettes ADD COLUMN cursor TEXT')
+            logger.info("Migration v1→v2: Added cursor column to palettes")
         self.conn.commit()
+
+    def _migrate_v2_to_v3(self):
+        """Migrate schema from v2 to v3.
+
+        Adds palette_status column to images table for eager palette extraction.
+        Images start as 'pending' and become 'extracted' once palette is generated.
+        Also marks existing images with palettes as 'extracted'.
+        """
+        cursor = self.conn.cursor()
+        # Check if column already exists (idempotent migration)
+        cursor.execute("PRAGMA table_info(images)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'palette_status' not in columns:
+            # Add the new column with default 'pending'
+            cursor.execute("ALTER TABLE images ADD COLUMN palette_status TEXT DEFAULT 'pending'")
+            logger.info("Migration v2→v3: Added palette_status column")
+        # Create index for efficient filtering (IF NOT EXISTS is already idempotent)
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_palette_status ON images(palette_status)')
+        # Mark images that already have palettes as 'extracted'
+        cursor.execute('''
+            UPDATE images SET palette_status = 'extracted'
+            WHERE filepath IN (SELECT filepath FROM palettes)
+        ''')
+        self.conn.commit()
+        logger.info("Migration v2→v3: Marked existing palettes as extracted")
+
+    def _migrate_v3_to_v4(self):
+        """Migrate schema from v3 to v4.
+
+        Adds compound index for efficient color filtering queries.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_palettes_color_filter '
+            'ON palettes(avg_lightness, color_temperature, avg_saturation)'
+        )
+        self.conn.commit()
+        logger.info("Migration v3→v4: Added compound index for color filtering")
 
     def close(self):
         """Close the database connection.
@@ -242,8 +300,8 @@ class ImageDatabase:
                 INSERT INTO images (
                     filepath, filename, source_id, width, height, aspect_ratio,
                     file_size, file_mtime, is_favorite, first_indexed_at,
-                    last_indexed_at, last_shown_at, times_shown
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_indexed_at, last_shown_at, times_shown, palette_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 record.filepath,
                 record.filename,
@@ -258,6 +316,7 @@ class ImageDatabase:
                 record.last_indexed_at,
                 record.last_shown_at,
                 record.times_shown,
+                record.palette_status,
             ))
             self.conn.commit()
 
@@ -299,7 +358,8 @@ class ImageDatabase:
                     first_indexed_at = ?,
                     last_indexed_at = ?,
                     last_shown_at = ?,
-                    times_shown = ?
+                    times_shown = ?,
+                    palette_status = ?
                 WHERE filepath = ?
             ''', (
                 record.filename,
@@ -314,6 +374,7 @@ class ImageDatabase:
                 record.last_indexed_at,
                 record.last_shown_at,
                 record.times_shown,
+                record.palette_status,
                 record.filepath,
             ))
             self.conn.commit()
@@ -330,8 +391,8 @@ class ImageDatabase:
                 INSERT INTO images (
                     filepath, filename, source_id, width, height, aspect_ratio,
                     file_size, file_mtime, is_favorite, first_indexed_at,
-                    last_indexed_at, last_shown_at, times_shown
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_indexed_at, last_shown_at, times_shown, palette_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     filename = excluded.filename,
                     source_id = excluded.source_id,
@@ -343,7 +404,8 @@ class ImageDatabase:
                     is_favorite = excluded.is_favorite,
                     last_indexed_at = excluded.last_indexed_at,
                     last_shown_at = excluded.last_shown_at,
-                    times_shown = excluded.times_shown
+                    times_shown = excluded.times_shown,
+                    palette_status = excluded.palette_status
             ''', (
                 record.filepath,
                 record.filename,
@@ -358,6 +420,7 @@ class ImageDatabase:
                 record.last_indexed_at,
                 record.last_shown_at,
                 record.times_shown,
+                record.palette_status,
             ))
             self.conn.commit()
 
@@ -500,6 +563,7 @@ class ImageDatabase:
             last_indexed_at=row['last_indexed_at'],
             last_shown_at=row['last_shown_at'],
             times_shown=row['times_shown'],
+            palette_status=row['palette_status'] or 'pending',
         )
 
     # =========================================================================
@@ -842,6 +906,144 @@ class ImageDatabase:
                 for r in records
             ])
             self.conn.commit()
+
+    # =========================================================================
+    # Palette Status Operations
+    # =========================================================================
+
+    def update_palette_status(self, filepath: str, status: str):
+        """Update the palette extraction status for an image.
+
+        Args:
+            filepath: Path to the image.
+            status: New status ('pending', 'extracted', 'failed').
+        """
+        if status not in ('pending', 'extracted', 'failed'):
+            raise ValueError(f"Invalid palette status: {status}")
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'UPDATE images SET palette_status = ? WHERE filepath = ?',
+                (status, filepath)
+            )
+            self.conn.commit()
+
+    def batch_update_palette_status(self, filepaths: List[str], status: str):
+        """Update palette status for multiple images.
+
+        Args:
+            filepaths: List of image filepaths.
+            status: New status ('pending', 'extracted', 'failed').
+        """
+        if not filepaths:
+            return
+        if status not in ('pending', 'extracted', 'failed'):
+            raise ValueError(f"Invalid palette status: {status}")
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            # Process in chunks to avoid SQLite parameter limit
+            for i in range(0, len(filepaths), 500):
+                chunk = filepaths[i:i+500]
+                placeholders = ','.join('?' * len(chunk))
+                cursor.execute(
+                    f'UPDATE images SET palette_status = ? WHERE filepath IN ({placeholders})',
+                    [status] + chunk
+                )
+            self.conn.commit()
+
+    def get_selectable_images(
+        self,
+        source_id: Optional[str] = None,
+        favorites_only: bool = False,
+    ) -> List[ImageRecord]:
+        """Get images that are eligible for time-based selection.
+
+        Only returns images with palette_status='extracted', ensuring all
+        returned images have palette data for time-based filtering.
+
+        Args:
+            source_id: Optional source_id to filter by.
+            favorites_only: If True, only return favorites.
+
+        Returns:
+            List of ImageRecords with extracted palettes.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            query = "SELECT * FROM images WHERE palette_status = 'extracted'"
+            params = []
+
+            if source_id is not None:
+                query += ' AND source_id = ?'
+                params.append(source_id)
+
+            if favorites_only:
+                query += ' AND is_favorite = 1'
+
+            cursor.execute(query, params)
+            return [self._row_to_image_record(row) for row in cursor.fetchall()]
+
+    def get_pending_palette_images(self, limit: Optional[int] = None) -> List[ImageRecord]:
+        """Get images that need palette extraction.
+
+        Returns images with palette_status='pending'.
+
+        Args:
+            limit: Maximum number of images to return.
+
+        Returns:
+            List of ImageRecords needing palette extraction.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            query = "SELECT * FROM images WHERE palette_status = 'pending'"
+            if limit:
+                query += f' LIMIT {limit}'
+            cursor.execute(query)
+            return [self._row_to_image_record(row) for row in cursor.fetchall()]
+
+    def get_failed_palette_images(self, limit: Optional[int] = None) -> List[ImageRecord]:
+        """Get images where palette extraction failed.
+
+        Returns images with palette_status='failed' for retry.
+
+        Args:
+            limit: Maximum number of images to return.
+
+        Returns:
+            List of ImageRecords with failed extraction.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            query = "SELECT * FROM images WHERE palette_status = 'failed'"
+            if limit:
+                query += f' LIMIT {limit}'
+            cursor.execute(query)
+            return [self._row_to_image_record(row) for row in cursor.fetchall()]
+
+    def count_images_by_palette_status(self) -> Dict[str, int]:
+        """Count images grouped by palette extraction status.
+
+        Returns:
+            Dict with status as key and count as value.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT
+                    SUM(CASE WHEN palette_status = 'pending' THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN palette_status = 'extracted' THEN 1 ELSE 0 END) as extracted,
+                    SUM(CASE WHEN palette_status = 'failed' THEN 1 ELSE 0 END) as failed
+                FROM images
+            ''')
+            row = cursor.fetchone()
+            return {
+                'pending': row['pending'] or 0,
+                'extracted': row['extracted'] or 0,
+                'failed': row['failed'] or 0,
+            }
 
     # =========================================================================
     # Statistics Queries
@@ -1299,8 +1501,8 @@ class ImageDatabase:
                 INSERT INTO images (
                     filepath, filename, source_id, width, height, aspect_ratio,
                     file_size, file_mtime, is_favorite, first_indexed_at,
-                    last_indexed_at, last_shown_at, times_shown
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_indexed_at, last_shown_at, times_shown, palette_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     filename = excluded.filename,
                     source_id = excluded.source_id,
@@ -1312,13 +1514,15 @@ class ImageDatabase:
                     is_favorite = excluded.is_favorite,
                     last_indexed_at = excluded.last_indexed_at,
                     last_shown_at = excluded.last_shown_at,
-                    times_shown = excluded.times_shown
+                    times_shown = excluded.times_shown,
+                    palette_status = excluded.palette_status
             ''', [
                 (
                     r.filepath, r.filename, r.source_id, r.width, r.height,
                     r.aspect_ratio, r.file_size, r.file_mtime,
                     1 if r.is_favorite else 0, r.first_indexed_at,
                     r.last_indexed_at, r.last_shown_at, r.times_shown,
+                    r.palette_status,
                 )
                 for r in records
             ])

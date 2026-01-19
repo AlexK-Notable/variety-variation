@@ -26,12 +26,15 @@ class ImageIndexer:
 
     Extracts metadata including dimensions, file size, and modification time.
     Derives source_id from parent directory names.
+
+    Supports eager palette extraction via on_images_indexed callback.
     """
 
     def __init__(
         self,
         db: ImageDatabase,
         favorites_folder: Optional[str] = None,
+        on_images_indexed: Optional[Callable[[List[str]], None]] = None,
     ):
         """Initialize the indexer.
 
@@ -39,9 +42,13 @@ class ImageIndexer:
             db: ImageDatabase instance for storing records.
             favorites_folder: Path to favorites folder. Images in this folder
                 or its subfolders will be marked as favorites.
+            on_images_indexed: Optional callback called after each batch of images
+                is indexed. Receives list of filepaths. Use this to trigger
+                eager palette extraction.
         """
         self.db = db
         self.favorites_folder = favorites_folder
+        self.on_images_indexed = on_images_indexed
         if favorites_folder:
             self.favorites_folder = os.path.normpath(favorites_folder)
 
@@ -193,11 +200,25 @@ class ImageIndexer:
                 # Flush batch when full
                 if len(batch) >= batch_size:
                     self.db.batch_upsert_images(batch)
+                    # Trigger eager palette extraction
+                    if self.on_images_indexed:
+                        indexed_paths = [r.filepath for r in batch]
+                        try:
+                            self.on_images_indexed(indexed_paths)
+                        except Exception as e:
+                            logger.warning(f"Palette extraction callback failed: {e}")
                     batch = []
 
         # Flush remaining batch
         if batch:
             self.db.batch_upsert_images(batch)
+            # Trigger eager palette extraction for final batch
+            if self.on_images_indexed:
+                indexed_paths = [r.filepath for r in batch]
+                try:
+                    self.on_images_indexed(indexed_paths)
+                except Exception as e:
+                    logger.warning(f"Palette extraction callback failed: {e}")
 
         # Create/update source records in batch
         new_sources = []
@@ -330,6 +351,14 @@ class ImageIndexer:
                 self.db.batch_upsert_images(records)
                 result.added += len(records)
 
+                # Trigger eager palette extraction for newly indexed images
+                if self.on_images_indexed:
+                    indexed_paths = [r.filepath for r in records]
+                    try:
+                        self.on_images_indexed(indexed_paths)
+                    except Exception as e:
+                        logger.warning(f"Palette extraction callback failed: {e}")
+
             processed += len(batch)
             if progress_callback:
                 progress_callback(processed, total_work, "Indexing new files...")
@@ -345,6 +374,8 @@ class ImageIndexer:
                     new_record.first_indexed_at = existing.first_indexed_at
                     new_record.times_shown = existing.times_shown
                     new_record.last_shown_at = existing.last_shown_at
+                    # Reset palette status for modified files (content may have changed)
+                    new_record.palette_status = 'pending'
                     records.append(new_record)
                     if new_record.source_id:
                         sources_seen.add(new_record.source_id)
@@ -358,6 +389,14 @@ class ImageIndexer:
             if records:
                 self.db.batch_upsert_images(records)
                 result.updated += len(records)
+
+                # Trigger eager palette extraction for modified images
+                if self.on_images_indexed:
+                    updated_paths = [r.filepath for r in records]
+                    try:
+                        self.on_images_indexed(updated_paths)
+                    except Exception as e:
+                        logger.warning(f"Palette extraction callback failed: {e}")
 
             processed += len(batch)
             if progress_callback:

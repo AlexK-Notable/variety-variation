@@ -40,12 +40,12 @@ class PaletteTarget:
         lightness: Target brightness (0.0=dark to 1.0=bright).
         temperature: Color warmth (-1.0=cool/blue to +1.0=warm/orange).
         saturation: Color intensity (0.0=muted to 1.0=vibrant).
-        tolerance: How strictly to match (lower=stricter). Default: 0.3.
+        tolerance: How strictly to match (lower=stricter). Default: 0.2.
     """
     lightness: float
     temperature: float
     saturation: float
-    tolerance: float = 0.3
+    tolerance: float = 0.2
 
 
 # Preset palette profiles for different time periods
@@ -122,40 +122,76 @@ def parse_time_string(time_str: str) -> dt_time:
         raise ValueError(f"Invalid time format: '{time_str}'. {e}")
 
 
+def _get_portal_color_scheme() -> Optional[int]:
+    """Get color scheme preference from XDG Desktop Portal.
+
+    Uses org.freedesktop.portal.Settings to query the system-wide
+    color scheme preference. Works on KDE, XFCE, and other freedesktop-
+    compliant desktops.
+
+    Returns:
+        0 = no preference, 1 = prefer dark, 2 = prefer light, or None if unavailable.
+    """
+    try:
+        import dbus
+        bus = dbus.SessionBus()
+        portal = bus.get_object(
+            'org.freedesktop.portal.Desktop',
+            '/org/freedesktop/portal/desktop'
+        )
+        settings = dbus.Interface(portal, 'org.freedesktop.portal.Settings')
+        # Read the color-scheme setting from org.freedesktop.appearance namespace
+        # Returns a variant containing: 0=no preference, 1=dark, 2=light
+        result = settings.Read('org.freedesktop.appearance', 'color-scheme')
+        # Unpack the variant (result is typically a nested variant)
+        if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
+            # D-Bus returns (value,) tuple for variants
+            value = int(result)
+        else:
+            value = int(result)
+        logger.debug(f"Portal color-scheme: {value}")
+        return value
+    except Exception as e:
+        logger.debug(f"Portal API not available: {e}")
+        return None
+
+
 def get_system_theme_preference() -> str:
     """Get current system theme preference from desktop settings.
 
     Tries to detect system dark/light mode by:
     1. GNOME: org.gnome.desktop.interface color-scheme
-    2. Default: Returns 'day' if detection fails
+    2. XDG Desktop Portal: org.freedesktop.appearance color-scheme
+    3. Default: Returns 'day' if detection fails
 
     Returns:
         'day' for light mode, 'night' for dark mode.
     """
-    if Gio is None:
-        logger.debug("Gio not available, defaulting to 'day'")
-        return "day"
+    # Try GNOME settings first (most reliable on GNOME-based desktops)
+    if Gio is not None:
+        try:
+            settings = Gio.Settings.new("org.gnome.desktop.interface")
+            scheme = settings.get_string("color-scheme")
+            logger.debug(f"GNOME color-scheme: {scheme}")
 
-    # Try GNOME settings first
-    try:
-        settings = Gio.Settings.new("org.gnome.desktop.interface")
-        scheme = settings.get_string("color-scheme")
-        logger.debug(f"GNOME color-scheme: {scheme}")
+            if scheme == "prefer-dark":
+                return "night"
+            elif scheme == "prefer-light":
+                return "day"
+            # "default" means no explicit preference, try portal fallback
+        except Exception as e:
+            logger.debug(f"Could not read GNOME settings: {e}")
 
-        if scheme == "prefer-dark":
+    # Try XDG Desktop Portal (works on KDE, XFCE, and other freedesktop-compliant DEs)
+    portal_scheme = _get_portal_color_scheme()
+    if portal_scheme is not None:
+        if portal_scheme == 1:  # prefer dark
             return "night"
-        elif scheme == "prefer-light":
+        elif portal_scheme == 2:  # prefer light
             return "day"
-        # "default" or other values default to day
-        return "day"
-    except Exception as e:
-        logger.debug(f"Could not read GNOME settings: {e}")
+        # 0 = no preference, fall through to default
 
-    # TODO: Add Portal API detection for non-GNOME desktops
-    # org.freedesktop.portal.Settings -> org.freedesktop.appearance color-scheme
-    # Values: 0=no preference, 1=dark, 2=light
-
-    logger.debug("System theme detection failed, defaulting to 'day'")
+    logger.debug("System theme detection: no preference found, defaulting to 'day'")
     return "day"
 
 

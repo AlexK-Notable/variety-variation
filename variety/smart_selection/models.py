@@ -28,6 +28,8 @@ class ImageRecord:
         last_indexed_at: When the image was last re-indexed (Unix timestamp).
         last_shown_at: When the image was last displayed (Unix timestamp).
         times_shown: Number of times this image has been displayed.
+        palette_status: Status of palette extraction ('pending', 'extracted', 'failed').
+            Images with 'pending' or 'failed' status are excluded from time-based selection.
     """
     filepath: str
     filename: str
@@ -42,6 +44,7 @@ class ImageRecord:
     last_indexed_at: Optional[int] = None
     last_shown_at: Optional[int] = None
     times_shown: int = 0
+    palette_status: str = 'pending'  # 'pending', 'extracted', 'failed'
 
 
 @dataclass

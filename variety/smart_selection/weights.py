@@ -344,7 +344,7 @@ def calculate_weight(
             time_target_temperature,
             time_target_saturation,
             config.palette_tolerance,
-            getattr(config, 'time_affinity_weight', 2.0),
+            getattr(config, 'time_affinity_weight', 4.0),
         )
 
     # Combine multiplicatively with minimum floor to prevent zero collapse

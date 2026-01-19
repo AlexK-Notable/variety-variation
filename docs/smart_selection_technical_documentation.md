@@ -1,8 +1,14 @@
 # Smart Selection Engine - Technical Documentation
 
-**Version:** 1.1
-**Last Updated:** 2024-12-05
+**Version:** 2.0
+**Last Updated:** 2026-01-19
 **Author:** Variety Development Team
+
+> **Recent Updates (v2.0):**
+> - Schema version 4: Compound index for color filtering, idempotent migrations
+> - A-ES weighted reservoir sampling: O(n + k·log k) selection algorithm
+> - XDG Desktop Portal API: Theme detection for KDE, XFCE, and other non-GNOME desktops
+> - TimeAdapter refactoring: Shared `_get_time_target()` method in SelectionEngine
 
 ---
 
@@ -1076,9 +1082,14 @@ Constraints for filtering images during selection.
 
 ### Schema Version
 
-Current version: **1**
+Current version: **4**
 
-Migration strategy: Future versions will include schema_version table and migration scripts.
+**Migration History:**
+- v1 → v2: Added `cursor` column to palettes table for theming engine
+- v2 → v3: Added `palette_status` column to images table for eager extraction
+- v3 → v4: Added compound index for efficient color filtering queries
+
+All migrations are idempotent (safe to run multiple times).
 
 ### Tables
 
@@ -1100,7 +1111,8 @@ CREATE TABLE images (
     first_indexed_at INTEGER,            -- When first indexed
     last_indexed_at INTEGER,             -- When last re-indexed
     last_shown_at INTEGER,               -- When last displayed
-    times_shown INTEGER DEFAULT 0        -- Number of times displayed
+    times_shown INTEGER DEFAULT 0,       -- Number of times displayed
+    palette_status TEXT DEFAULT 'pending' -- 'pending', 'extracted', 'failed'
 );
 ```
 
@@ -1109,6 +1121,7 @@ CREATE TABLE images (
 CREATE INDEX idx_images_source ON images(source_id);
 CREATE INDEX idx_images_last_shown ON images(last_shown_at);
 CREATE INDEX idx_images_favorite ON images(is_favorite);
+CREATE INDEX idx_images_palette_status ON images(palette_status);
 ```
 
 **Row Count Estimate:** 1,000 - 50,000 typical
@@ -1153,6 +1166,7 @@ CREATE TABLE palettes (
     avg_lightness REAL,                  -- Average lightness (0-1)
     color_temperature REAL,              -- Temperature (-1 to +1)
     indexed_at INTEGER,                  -- When extracted
+    cursor TEXT,                         -- Cursor theme name (v2+)
     FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
 );
 ```
@@ -1161,6 +1175,8 @@ CREATE TABLE palettes (
 ```sql
 CREATE INDEX idx_palettes_lightness ON palettes(avg_lightness);
 CREATE INDEX idx_palettes_temperature ON palettes(color_temperature);
+-- Compound index for efficient color filtering queries (v4+)
+CREATE INDEX idx_palettes_color_filter ON palettes(avg_lightness, color_temperature, avg_saturation);
 ```
 
 **Row Count Estimate:** 0 - 50,000 (grows as images are shown)
@@ -3320,7 +3336,7 @@ All fixes include comprehensive test coverage to prevent regressions.
 class ImageDatabase:
     """SQLite database for image indexing and selection tracking."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 4
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed."""
@@ -3357,7 +3373,7 @@ class ImageDatabase:
     This ensures safe multi-threaded access without data corruption.
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 4
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -3903,9 +3919,10 @@ This section applies lateral thinking to identify edge cases, hidden assumptions
    - **Recommendation**: Add `__post_init__` validation in dataclass or dedicated validator
 
 6. **Backward Compatibility Strategy**
-   - Database schema versioning exists (`SCHEMA_VERSION = 1`), but no migration framework
-   - Future schema changes require manual migration scripts
-   - **Recommendation**: Add migration infrastructure early (e.g., using Alembic or custom migration runner)
+   - Database schema versioning (`SCHEMA_VERSION = 4`) with built-in migration framework
+   - Migrations are idempotent and run automatically on database open
+   - All ALTER TABLE operations check for column existence before modifying
+   - CREATE INDEX IF NOT EXISTS ensures safe index creation
 
 ---
 

@@ -171,8 +171,8 @@ class TestTimeAdaptationConfig(unittest.TestCase):
         self.assertEqual(config.night_temperature, 0.4)
         self.assertEqual(config.night_saturation, 0.4)
 
-        # Default tolerance
-        self.assertEqual(config.palette_tolerance, 0.3)
+        # Default tolerance (stricter for better time matching)
+        self.assertEqual(config.palette_tolerance, 0.2)
 
     def test_time_adaptation_custom_values(self):
         """Time adaptation fields can be set to custom values."""
