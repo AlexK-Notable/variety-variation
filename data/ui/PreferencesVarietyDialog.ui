@@ -5430,6 +5430,46 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                             <property name="position">5</property>
                           </packing>
                         </child>
+                        <!-- Global Exclusions Section -->
+                        <child>
+                          <object class="GtkBox" id="wallhaven_exclusions_box">
+                            <property name="visible">True</property>
+                            <property name="can_focus">False</property>
+                            <property name="margin_top">10</property>
+                            <property name="spacing">5</property>
+                            <child>
+                              <object class="GtkLabel" id="wallhaven_exclusions_label">
+                                <property name="visible">True</property>
+                                <property name="can_focus">False</property>
+                                <property name="label" translatable="yes">Global exclusions:</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">0</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkEntry" id="wallhaven_exclusions">
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <property name="placeholder_text" translatable="yes">e.g., -anime -people -animals (applied to all searches)</property>
+                                <property name="tooltip_text" translatable="yes">Tags to exclude from ALL Wallhaven searches. Use -tag syntax, space-separated.</property>
+                                <signal name="changed" handler="on_wallhaven_exclusions_changed" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">True</property>
+                                <property name="fill">True</property>
+                                <property name="position">1</property>
+                              </packing>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">6</property>
+                          </packing>
+                        </child>
                       </object>
                     </child>
                   </object>

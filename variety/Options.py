@@ -149,6 +149,11 @@ class Options:
                 pass
 
             try:
+                self.wallhaven_exclusions = str(config["wallhaven_exclusions"]).strip()
+            except Exception:
+                pass
+
+            try:
                 self.favorites_folder = os.path.expanduser(config["favorites_folder"])
             except Exception:
                 pass
@@ -863,6 +868,7 @@ class Options:
         self.quota_enabled = True
         self.quota_size = 1000
         self.wallhaven_api_key = ""
+        self.wallhaven_exclusions = ""  # Global exclusions for all Wallhaven searches
 
         self.favorites_folder = os.path.join(get_profile_path(), "Favorites")
         self.favorites_operations = [
@@ -1016,6 +1022,7 @@ class Options:
             config["quota_size"] = str(self.quota_size)
 
             config["wallhaven_api_key"] = str(self.wallhaven_api_key)
+            config["wallhaven_exclusions"] = str(self.wallhaven_exclusions)
 
             config["favorites_folder"] = Util.collapseuser(self.favorites_folder)
             config["favorites_operations"] = ";".join(

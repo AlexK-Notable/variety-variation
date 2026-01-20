@@ -3147,6 +3147,10 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if hasattr(self.options, 'wallhaven_api_key'):
             self.ui.wallhaven_apikey.set_text(self.options.wallhaven_api_key or "")
 
+        # Load global exclusions if present
+        if hasattr(self.options, 'wallhaven_exclusions'):
+            self.ui.wallhaven_exclusions.set_text(self.options.wallhaven_exclusions or "")
+
         # Initially populate list without stats (will be updated async)
         for source in wallhaven_sources:
             enabled = source[0]
@@ -3268,4 +3272,11 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if self.loading:
             return
         self.options.wallhaven_api_key = self.ui.wallhaven_apikey.get_text().strip()
+        self.delayed_apply()
+
+    def on_wallhaven_exclusions_changed(self, widget=None):
+        """Handle Wallhaven global exclusions change."""
+        if self.loading:
+            return
+        self.options.wallhaven_exclusions = self.ui.wallhaven_exclusions.get_text().strip()
         self.delayed_apply()
