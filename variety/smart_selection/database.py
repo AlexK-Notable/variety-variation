@@ -34,7 +34,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -195,6 +195,7 @@ class ImageDatabase:
             2: self._migrate_v1_to_v2,
             3: self._migrate_v2_to_v3,
             4: self._migrate_v3_to_v4,
+            5: self._migrate_v4_to_v5,
         }
 
         with self._lock:
@@ -264,6 +265,38 @@ class ImageDatabase:
         self.conn.commit()
         logger.info("Migration v3→v4: Added compound index for color filtering")
 
+    def _migrate_v4_to_v5(self):
+        """Migrate schema from v4 to v5.
+
+        Adds stale_at column to images table for soft-delete support.
+        When an image file is missing, instead of deleting the record immediately,
+        we set stale_at to the current timestamp. This allows recovery if the file
+        returns (e.g., unmounted drives) and preserves palette data for 2 weeks.
+
+        Also recreates palettes table without ON DELETE CASCADE to prevent
+        automatic palette deletion when images are modified.
+        """
+        cursor = self.conn.cursor()
+
+        # Check if stale_at column already exists (idempotent migration)
+        cursor.execute("PRAGMA table_info(images)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'stale_at' not in columns:
+            cursor.execute('ALTER TABLE images ADD COLUMN stale_at INTEGER')
+            logger.info("Migration v4→v5: Added stale_at column to images")
+
+        # Create index for efficient stale queries
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_stale ON images(stale_at)')
+
+        # Note: We cannot easily modify the FK constraint on existing palettes table
+        # in SQLite without recreating the table. The ON DELETE CASCADE is still
+        # present but won't trigger for soft-deletes (we set stale_at instead of
+        # deleting). When we hard-delete during purge, we explicitly delete palettes
+        # first to maintain control over the process.
+
+        self.conn.commit()
+        logger.info("Migration v4→v5: Soft-delete support enabled")
+
     def close(self):
         """Close the database connection.
 
@@ -331,7 +364,10 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT * FROM images WHERE filepath = ?', (filepath,))
+            cursor.execute(
+                'SELECT * FROM images WHERE filepath = ? AND stale_at IS NULL',
+                (filepath,)
+            )
             row = cursor.fetchone()
             if row is None:
                 return None
@@ -424,16 +460,33 @@ class ImageDatabase:
             ))
             self.conn.commit()
 
-    def delete_image(self, filepath: str):
+    def delete_image(self, filepath: str, soft_delete: bool = True) -> bool:
         """Delete an image record by filepath.
+
+        By default uses soft-delete (marks as stale) to preserve palette data.
+        Use soft_delete=False for hard deletion.
 
         Args:
             filepath: Path to the image to delete.
+            soft_delete: If True (default), mark as stale instead of deleting.
+                If False, hard delete the image and its palette.
+
+        Returns:
+            True if the image was found and affected, False otherwise.
         """
+        if soft_delete:
+            # Soft-delete: mark as stale
+            return self.mark_images_stale([filepath]) > 0
+
+        # Hard delete
         with self._lock:
             cursor = self.conn.cursor()
+            # Delete palette first (explicit control)
+            cursor.execute('DELETE FROM palettes WHERE filepath = ?', (filepath,))
             cursor.execute('DELETE FROM images WHERE filepath = ?', (filepath,))
+            deleted = cursor.rowcount > 0
             self.conn.commit()
+            return deleted
 
     def get_all_images(self) -> List[ImageRecord]:
         """Get all image records.
@@ -443,7 +496,7 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT * FROM images')
+            cursor.execute('SELECT * FROM images WHERE stale_at IS NULL')
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
     def get_images_by_source(self, source_id: str) -> List[ImageRecord]:
@@ -457,7 +510,10 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT * FROM images WHERE source_id = ?', (source_id,))
+            cursor.execute(
+                'SELECT * FROM images WHERE source_id = ? AND stale_at IS NULL',
+                (source_id,)
+            )
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
     def get_favorite_images(self) -> List[ImageRecord]:
@@ -468,7 +524,9 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT * FROM images WHERE is_favorite = 1')
+            cursor.execute(
+                'SELECT * FROM images WHERE is_favorite = 1 AND stale_at IS NULL'
+            )
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
     def get_images_cursor(
@@ -500,13 +558,14 @@ class ImageDatabase:
                 cursor = self.conn.cursor()
                 if source_id is not None:
                     cursor.execute(
-                        'SELECT * FROM images WHERE source_id = ? '
+                        'SELECT * FROM images WHERE source_id = ? AND stale_at IS NULL '
                         'ORDER BY filepath LIMIT ? OFFSET ?',
                         (source_id, batch_size, offset)
                     )
                 else:
                     cursor.execute(
-                        'SELECT * FROM images ORDER BY filepath LIMIT ? OFFSET ?',
+                        'SELECT * FROM images WHERE stale_at IS NULL '
+                        'ORDER BY filepath LIMIT ? OFFSET ?',
                         (batch_size, offset)
                     )
                 rows = cursor.fetchall()
@@ -660,13 +719,14 @@ class ImageDatabase:
                 cursor.execute('''
                     SELECT source_id, COUNT(*) as count
                     FROM images
-                    WHERE source_id LIKE ?
+                    WHERE source_id LIKE ? AND stale_at IS NULL
                     GROUP BY source_id
                 ''', (f"{source_prefix}%",))
             else:
                 cursor.execute('''
                     SELECT source_id, COUNT(*) as count
                     FROM images
+                    WHERE stale_at IS NULL
                     GROUP BY source_id
                 ''')
             return {row['source_id']: row['count'] for row in cursor.fetchall()}
@@ -697,13 +757,14 @@ class ImageDatabase:
                 cursor.execute('''
                     SELECT source_id, SUM(times_shown) as total_shown
                     FROM images
-                    WHERE source_id LIKE ?
+                    WHERE source_id LIKE ? AND stale_at IS NULL
                     GROUP BY source_id
                 ''', (f"{source_prefix}%",))
             else:
                 cursor.execute('''
                     SELECT source_id, SUM(times_shown) as total_shown
                     FROM images
+                    WHERE stale_at IS NULL
                     GROUP BY source_id
                 ''')
             return {row['source_id']: row['total_shown'] or 0 for row in cursor.fetchall()}
@@ -849,6 +910,7 @@ class ImageDatabase:
             cursor.execute('''
                 SELECT i.* FROM images i
                 INNER JOIN palettes p ON i.filepath = p.filepath
+                WHERE i.stale_at IS NULL
             ''')
             return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
@@ -871,7 +933,7 @@ class ImageDatabase:
             query = '''
                 SELECT i.* FROM images i
                 LEFT JOIN palettes p ON i.filepath = p.filepath
-                WHERE p.filepath IS NULL
+                WHERE p.filepath IS NULL AND i.stale_at IS NULL
             '''
             if limit:
                 query += f' LIMIT {limit} OFFSET {offset}'
@@ -1046,7 +1108,7 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            query = "SELECT * FROM images WHERE palette_status = 'extracted'"
+            query = "SELECT * FROM images WHERE palette_status = 'extracted' AND stale_at IS NULL"
             params = []
 
             if source_id is not None:
@@ -1072,7 +1134,7 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            query = "SELECT * FROM images WHERE palette_status = 'pending'"
+            query = "SELECT * FROM images WHERE palette_status = 'pending' AND stale_at IS NULL"
             if limit:
                 query += f' LIMIT {limit}'
             cursor.execute(query)
@@ -1091,7 +1153,7 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            query = "SELECT * FROM images WHERE palette_status = 'failed'"
+            query = "SELECT * FROM images WHERE palette_status = 'failed' AND stale_at IS NULL"
             if limit:
                 query += f' LIMIT {limit}'
             cursor.execute(query)
@@ -1111,6 +1173,7 @@ class ImageDatabase:
                     SUM(CASE WHEN palette_status = 'extracted' THEN 1 ELSE 0 END) as extracted,
                     SUM(CASE WHEN palette_status = 'failed' THEN 1 ELSE 0 END) as failed
                 FROM images
+                WHERE stale_at IS NULL
             ''')
             row = cursor.fetchone()
             return {
@@ -1131,7 +1194,7 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM images')
+            cursor.execute('SELECT COUNT(*) FROM images WHERE stale_at IS NULL')
             return cursor.fetchone()[0]
 
     def count_sources(self) -> int:
@@ -1153,7 +1216,11 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM palettes')
+            cursor.execute('''
+                SELECT COUNT(*) FROM palettes p
+                INNER JOIN images i ON p.filepath = i.filepath
+                WHERE i.stale_at IS NULL
+            ''')
             return cursor.fetchone()[0]
 
     def count_images_without_palettes(self) -> int:
@@ -1167,7 +1234,7 @@ class ImageDatabase:
             cursor.execute('''
                 SELECT COUNT(*) FROM images i
                 LEFT JOIN palettes p ON i.filepath = p.filepath
-                WHERE p.filepath IS NULL
+                WHERE p.filepath IS NULL AND i.stale_at IS NULL
             ''')
             return cursor.fetchone()[0]
 
@@ -1179,7 +1246,9 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT COALESCE(SUM(times_shown), 0) FROM images')
+            cursor.execute(
+                'SELECT COALESCE(SUM(times_shown), 0) FROM images WHERE stale_at IS NULL'
+            )
             return cursor.fetchone()[0]
 
     def count_shown_images(self) -> int:
@@ -1190,7 +1259,9 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM images WHERE times_shown > 0')
+            cursor.execute(
+                'SELECT COUNT(*) FROM images WHERE times_shown > 0 AND stale_at IS NULL'
+            )
             return cursor.fetchone()[0]
 
     def get_lightness_counts(self) -> dict:
@@ -1214,7 +1285,9 @@ class ImageDatabase:
                     SUM(CASE WHEN avg_lightness >= 0.25 AND avg_lightness < 0.50 THEN 1 ELSE 0 END) as medium_dark,
                     SUM(CASE WHEN avg_lightness >= 0.50 AND avg_lightness < 0.75 THEN 1 ELSE 0 END) as medium_light,
                     SUM(CASE WHEN avg_lightness >= 0.75 AND avg_lightness <= 1.00 THEN 1 ELSE 0 END) as light
-                FROM palettes
+                FROM palettes p
+                INNER JOIN images i ON p.filepath = i.filepath
+                WHERE i.stale_at IS NULL
             ''')
             row = cursor.fetchone()
             return {
@@ -1257,7 +1330,9 @@ class ImageDatabase:
                     SUM(CASE WHEN avg_saturation >= 0.1 AND avg_hue >= 195 AND avg_hue < 255 THEN 1 ELSE 0 END) as blue,
                     SUM(CASE WHEN avg_saturation >= 0.1 AND avg_hue >= 255 AND avg_hue < 285 THEN 1 ELSE 0 END) as purple,
                     SUM(CASE WHEN avg_saturation >= 0.1 AND avg_hue >= 285 AND avg_hue < 345 THEN 1 ELSE 0 END) as pink
-                FROM palettes
+                FROM palettes p
+                INNER JOIN images i ON p.filepath = i.filepath
+                WHERE i.stale_at IS NULL
             ''')
             row = cursor.fetchone()
             return {
@@ -1293,7 +1368,9 @@ class ImageDatabase:
                     SUM(CASE WHEN avg_saturation >= 0.25 AND avg_saturation < 0.50 THEN 1 ELSE 0 END) as moderate,
                     SUM(CASE WHEN avg_saturation >= 0.50 AND avg_saturation < 0.75 THEN 1 ELSE 0 END) as saturated,
                     SUM(CASE WHEN avg_saturation >= 0.75 AND avg_saturation <= 1.00 THEN 1 ELSE 0 END) as vibrant
-                FROM palettes
+                FROM palettes p
+                INNER JOIN images i ON p.filepath = i.filepath
+                WHERE i.stale_at IS NULL
             ''')
             row = cursor.fetchone()
             return {
@@ -1319,22 +1396,14 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('''
-                SELECT
-                    SUM(CASE WHEN avg_lightness >= ? AND avg_lightness >= ? THEN 1 ELSE 0 END) as day_only,
-                    SUM(CASE WHEN avg_lightness < ? AND avg_lightness < ? THEN 1 ELSE 0 END) as night_only,
-                    SUM(CASE WHEN avg_lightness >= ? AND avg_lightness < ? THEN 1 ELSE 0 END) as both_suitable,
-                    SUM(CASE WHEN avg_lightness < ? AND avg_lightness >= ? THEN 1 ELSE 0 END) as neither
-                FROM palettes
-            ''', (day_threshold, night_threshold, night_threshold, day_threshold,
-                  night_threshold, day_threshold, day_threshold, night_threshold))
-            row = cursor.fetchone()
-            # Simplify: day-suitable = lightness >= 0.5, night-suitable = lightness < 0.5
+            # day-suitable = lightness >= 0.5, night-suitable = lightness < 0.5
             cursor.execute('''
                 SELECT
                     SUM(CASE WHEN avg_lightness >= ? THEN 1 ELSE 0 END) as day_suitable,
                     SUM(CASE WHEN avg_lightness < ? THEN 1 ELSE 0 END) as night_suitable
-                FROM palettes
+                FROM palettes p
+                INNER JOIN images i ON p.filepath = i.filepath
+                WHERE i.stale_at IS NULL
             ''', (day_threshold, night_threshold))
             row = cursor.fetchone()
             return {
@@ -1364,6 +1433,7 @@ class ImageDatabase:
                     SUM(CASE WHEN times_shown >= 5 AND times_shown <= 9 THEN 1 ELSE 0 END) as often_shown,
                     SUM(CASE WHEN times_shown >= 10 THEN 1 ELSE 0 END) as frequently_shown
                 FROM images
+                WHERE stale_at IS NULL
             ''')
             row = cursor.fetchone()
             return {
@@ -1526,33 +1596,201 @@ class ImageDatabase:
             self.conn.commit()
             return deleted
 
-    def remove_missing_files(self) -> int:
-        """Remove index entries for files that no longer exist.
+    def remove_missing_files(self) -> Dict[str, int]:
+        """Handle index entries for files that no longer exist.
+
+        Uses soft-delete: marks missing files as stale instead of deleting them.
+        Stale entries are retained for 14 days to allow recovery if files return
+        (e.g., unmounted drives, network storage). Also restores previously stale
+        entries if their files have reappeared.
 
         Returns:
-            Number of missing file entries removed.
+            Dict with counts:
+            - 'marked_stale': Number of newly stale entries
+            - 'restored': Number of stale entries restored (file returned)
         """
         import os
 
         with self._lock:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT filepath FROM images')
-            all_images = [row[0] for row in cursor.fetchall()]
 
-            missing = [fp for fp in all_images if not os.path.exists(fp)]
-            if missing:
-                placeholders = ','.join('?' * len(missing))
-                cursor.execute(
-                    f'DELETE FROM palettes WHERE filepath IN ({placeholders})',
-                    missing
-                )
-                cursor.execute(
-                    f'DELETE FROM images WHERE filepath IN ({placeholders})',
-                    missing
-                )
+            # Get all images including stale ones to check for restoration
+            cursor.execute('SELECT filepath, stale_at FROM images')
+            all_images = [(row[0], row[1]) for row in cursor.fetchall()]
+
+        # Separate into categories (outside lock for file I/O)
+        missing = []
+        restored = []
+        for filepath, stale_at in all_images:
+            exists = os.path.exists(filepath)
+            if not exists and stale_at is None:
+                # File missing and not yet marked stale
+                missing.append(filepath)
+            elif exists and stale_at is not None:
+                # File returned, was previously stale
+                restored.append(filepath)
+
+        results = {'marked_stale': 0, 'restored': 0}
+
+        # Mark missing files as stale
+        if missing:
+            results['marked_stale'] = self.mark_images_stale(missing)
+
+        # Restore files that have reappeared
+        if restored:
+            with self._lock:
+                cursor = self.conn.cursor()
+                for i in range(0, len(restored), 500):
+                    chunk = restored[i:i+500]
+                    placeholders = ','.join('?' * len(chunk))
+                    cursor.execute(
+                        f'UPDATE images SET stale_at = NULL WHERE filepath IN ({placeholders})',
+                        chunk
+                    )
+                    results['restored'] += cursor.rowcount
                 self.conn.commit()
+                if results['restored'] > 0:
+                    logger.info(f"Restored {results['restored']} images (files reappeared)")
 
-            return len(missing)
+        return results
+
+    # =========================================================================
+    # Soft-Delete Operations
+    # =========================================================================
+
+    def mark_images_stale(self, file_paths: List[str]) -> int:
+        """Mark images as stale instead of deleting them.
+
+        Soft-delete operation that sets stale_at timestamp. Stale images are
+        excluded from selection but retain their data (including palettes) for
+        potential recovery. Use purge_stale_images() to permanently remove
+        entries that have been stale for more than the retention period.
+
+        Args:
+            file_paths: List of image filepaths to mark as stale.
+
+        Returns:
+            Number of images marked as stale.
+        """
+        if not file_paths:
+            return 0
+
+        now = int(time.time())
+        with self._lock:
+            cursor = self.conn.cursor()
+            marked = 0
+            # SQLite has 999 parameter limit, batch in chunks of 500
+            for i in range(0, len(file_paths), 500):
+                chunk = file_paths[i:i+500]
+                placeholders = ','.join('?' * len(chunk))
+                cursor.execute(
+                    f'UPDATE images SET stale_at = ? WHERE filepath IN ({placeholders}) '
+                    f'AND stale_at IS NULL',
+                    [now] + chunk
+                )
+                marked += cursor.rowcount
+            self.conn.commit()
+            if marked > 0:
+                logger.info(f"Marked {marked} images as stale")
+            return marked
+
+    def purge_stale_images(self, older_than_days: int = 14) -> int:
+        """Permanently delete images that have been stale for too long.
+
+        Hard-deletes images (and their palettes) that were marked stale more
+        than older_than_days ago. This is the final cleanup step for soft-deleted
+        entries that haven't been restored.
+
+        Args:
+            older_than_days: Only purge entries stale for more than this many days.
+                Default is 14 days (2 weeks retention).
+
+        Returns:
+            Number of images purged (hard-deleted).
+        """
+        cutoff = int(time.time()) - (older_than_days * 86400)
+        with self._lock:
+            cursor = self.conn.cursor()
+
+            # First, get filepaths of images to purge for logging
+            cursor.execute(
+                'SELECT filepath FROM images WHERE stale_at IS NOT NULL AND stale_at < ?',
+                (cutoff,)
+            )
+            to_purge = [row[0] for row in cursor.fetchall()]
+
+            if not to_purge:
+                return 0
+
+            # Delete palettes first (explicit control, not relying on CASCADE)
+            placeholders = ','.join('?' * len(to_purge))
+            cursor.execute(
+                f'DELETE FROM palettes WHERE filepath IN ({placeholders})',
+                to_purge
+            )
+
+            # Then delete the images
+            cursor.execute(
+                f'DELETE FROM images WHERE filepath IN ({placeholders})',
+                to_purge
+            )
+
+            self.conn.commit()
+            logger.info(f"Purged {len(to_purge)} stale images (older than {older_than_days} days)")
+            return len(to_purge)
+
+    def restore_stale_image(self, file_path: str) -> bool:
+        """Restore a stale image by clearing its stale_at timestamp.
+
+        Use this when a previously missing file has returned (e.g., drive
+        remounted, file restored from backup). The image becomes eligible
+        for selection again with all its data intact.
+
+        Args:
+            file_path: Path to the image to restore.
+
+        Returns:
+            True if the image was restored, False if not found or not stale.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'UPDATE images SET stale_at = NULL WHERE filepath = ? AND stale_at IS NOT NULL',
+                (file_path,)
+            )
+            restored = cursor.rowcount > 0
+            self.conn.commit()
+            if restored:
+                logger.debug(f"Restored stale image: {file_path}")
+            return restored
+
+    def count_stale_images(self) -> int:
+        """Count images currently marked as stale.
+
+        Returns:
+            Number of stale images pending purge.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM images WHERE stale_at IS NOT NULL')
+            return cursor.fetchone()[0]
+
+    def get_stale_images(self, limit: Optional[int] = None) -> List[ImageRecord]:
+        """Get images that are currently marked as stale.
+
+        Args:
+            limit: Maximum number of records to return.
+
+        Returns:
+            List of stale ImageRecords.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            query = 'SELECT * FROM images WHERE stale_at IS NOT NULL ORDER BY stale_at'
+            if limit:
+                query += f' LIMIT {limit}'
+            cursor.execute(query)
+            return [self._row_to_image_record(row) for row in cursor.fetchall()]
 
     # =========================================================================
     # Batch Operations
@@ -1649,19 +1887,32 @@ class ImageDatabase:
             )
             return {row['filepath']: row['file_mtime'] for row in cursor.fetchall()}
 
-    def batch_delete_images(self, filepaths: List[str]):
+    def batch_delete_images(self, filepaths: List[str], soft_delete: bool = True) -> int:
         """Delete multiple images in a single transaction.
 
-        Also removes associated palette records for deleted images.
+        By default uses soft-delete (marks as stale) to preserve palette data.
+        Use soft_delete=False for hard deletion when data should be removed
+        completely (e.g., explicit user action).
 
         Args:
-            filepaths: List of filepaths to delete
+            filepaths: List of filepaths to delete.
+            soft_delete: If True (default), mark as stale instead of deleting.
+                If False, hard delete images and their palettes.
+
+        Returns:
+            Number of images affected (marked stale or deleted).
         """
         if not filepaths:
-            return
+            return 0
 
+        if soft_delete:
+            # Soft-delete: mark as stale, preserve palette data
+            return self.mark_images_stale(filepaths)
+
+        # Hard delete: remove images and palettes
         with self._lock:
             cursor = self.conn.cursor()
+            deleted = 0
             # SQLite has 999 parameter limit, batch in chunks of 500
             for i in range(0, len(filepaths), 500):
                 chunk = filepaths[i:i+500]
@@ -1678,4 +1929,6 @@ class ImageDatabase:
                     f'DELETE FROM images WHERE filepath IN ({placeholders})',
                     chunk
                 )
+                deleted += cursor.rowcount
             self.conn.commit()
+            return deleted

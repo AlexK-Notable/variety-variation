@@ -637,6 +637,10 @@ class SmartSelector:
             if count > 0:
                 logger.info(f"Removed {count} entries for missing files")
 
+        # Invalidate statistics cache if any changes were made
+        if (results['orphans_removed'] > 0 or results['missing_removed'] > 0) and self._statistics:
+            self._statistics.invalidate()
+
         return results
 
     def backup_database(self, backup_path: str = None) -> bool:

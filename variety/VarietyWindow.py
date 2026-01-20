@@ -427,6 +427,12 @@ class VarietyWindow(Gtk.Window):
                     if removed > 0:
                         logger.info(lambda: f"Smart Selection: Removed {removed} stale entries for missing files")
 
+                    # Extract palettes for images that don't have them yet
+                    # This resolves the catch-22 where images without luminosity data
+                    # can't match time-based filters, so they never get selected/indexed
+                    if getattr(self.options, 'smart_color_enabled', False):
+                        self._batch_extract_missing_palettes()
+
                 except Exception as e:
                     logger.warning(lambda: f"Smart Selection: Failed to index sources: {e}")
 
@@ -1081,6 +1087,10 @@ class VarietyWindow(Gtk.Window):
         server_options_thread.daemon = True
         server_options_thread.start()
 
+        stale_purge_thread = threading.Thread(target=self.stale_purge_thread)
+        stale_purge_thread.daemon = True
+        stale_purge_thread.start()
+
     def is_in_favorites(self, file):
         filename = os.path.basename(file)
         return os.path.exists(os.path.join(self.options.favorites_folder, filename))
@@ -1488,6 +1498,35 @@ class VarietyWindow(Gtk.Window):
 
             time.sleep(3600 * 24)  # Update once daily
 
+    def stale_purge_thread(self):
+        """Daily cleanup of stale database entries.
+
+        This thread periodically purges images that have been marked as stale
+        for more than 14 days. Stale images are those whose files no longer exist
+        on disk but whose records (including palette data) are retained for
+        potential recovery (e.g., unmounted drives, network shares).
+
+        The thread waits 1 hour after startup before the first check, then
+        runs daily. This conservative schedule minimizes resource usage while
+        ensuring old stale entries don't accumulate indefinitely.
+        """
+        time.sleep(3600)  # Wait 1 hour after startup
+        while self.running:
+            try:
+                if self.smart_selector:
+                    purged = self.smart_selector.db.purge_stale_images(older_than_days=14)
+                    if purged > 0:
+                        logger.info(f"Purged {purged} stale images from index")
+                        self.smart_selector._statistics.invalidate()
+            except Exception:
+                logger.exception("Error in stale purge thread")
+
+            # Sleep for 24 hours (check self.running every minute)
+            for _ in range(24 * 60):
+                if not self.running:
+                    break
+                time.sleep(60)
+
     def has_real_downloaders(self):
         return sum(1 for d in self.downloaders if not d.is_refresher()) > 0
 
@@ -1549,6 +1588,120 @@ class VarietyWindow(Gtk.Window):
         if random.random() < 0.05:
             self.purge_downloaded()
 
+    def _index_downloaded_image_with_palette(self, filepath):
+        """Index a newly downloaded image and extract its color palette.
+
+        This ensures new images have palette data immediately, allowing them
+        to be considered for time-based luminosity filtering in smart selection.
+        Without pre-indexing, new images would never match luminosity criteria
+        and thus never be selected or have their palettes extracted.
+
+        Args:
+            filepath: Path to the newly downloaded image file.
+        """
+        if not hasattr(self, 'smart_selector') or not self.smart_selector:
+            return
+
+        try:
+            from variety.smart_selection.indexer import ImageIndexer
+            from variety.smart_selection.palette import PaletteExtractor, create_palette_record
+
+            # Check if image is already indexed with palette
+            existing = self.smart_selector.db.get_image(filepath)
+            existing_palette = self.smart_selector.db.get_palette(filepath)
+            if existing and existing_palette:
+                logger.debug(lambda: f"Image already indexed with palette: {filepath}")
+                return
+
+            # Index the image metadata if not already done
+            if not existing:
+                indexer = ImageIndexer(
+                    self.smart_selector.db,
+                    favorites_folder=self.options.favorites_folder
+                )
+                record = indexer.index_image(filepath)
+                if record:
+                    self.smart_selector.db.upsert_image(record)
+                    logger.debug(lambda: f"Indexed downloaded image: {filepath}")
+
+            # Extract and store palette if not already done
+            if not existing_palette:
+                extractor = PaletteExtractor()
+                if extractor.is_wallust_available():
+                    palette_data = extractor.extract_palette(filepath)
+                    if palette_data:
+                        palette_record = create_palette_record(filepath, palette_data)
+                        self.smart_selector.db.upsert_palette(palette_record)
+                        logger.info(lambda: f"Extracted palette for downloaded image: {filepath}")
+                    else:
+                        logger.debug(lambda: f"Could not extract palette for: {filepath}")
+
+        except Exception as e:
+            logger.warning(lambda: f"Failed to index/extract palette for {filepath}: {e}")
+
+    def _batch_extract_missing_palettes(self):
+        """Extract palettes for all indexed images that don't have them.
+
+        This runs in the background during startup to resolve the catch-22 where
+        images without luminosity data (avg_lightness) can't match time-based
+        filters, meaning they'll never be selected and thus never get indexed.
+
+        Uses multiprocess extraction for efficiency on large collections.
+        """
+        if not hasattr(self, 'smart_selector') or not self.smart_selector:
+            return
+
+        try:
+            from variety.smart_selection.palette import PaletteExtractor, create_palette_record
+
+            # Get all images without palettes
+            images_without_palettes = self.smart_selector.db.get_images_without_palettes()
+            if not images_without_palettes:
+                logger.debug(lambda: "Smart Selection: All images already have palettes")
+                return
+
+            # Extract just the filepaths and filter for existing files
+            filepaths = [
+                img.filepath for img in images_without_palettes
+                if os.path.exists(img.filepath)
+            ]
+
+            if not filepaths:
+                logger.debug(lambda: "Smart Selection: No valid images need palette extraction")
+                return
+
+            logger.info(lambda: f"Smart Selection: Extracting palettes for {len(filepaths)} images...")
+
+            extractor = PaletteExtractor()
+            if not extractor.is_wallust_available():
+                logger.warning(lambda: "Smart Selection: wallust not available, skipping batch palette extraction")
+                return
+
+            # Use multiprocess extraction for efficiency
+            def progress_callback(completed, total):
+                if completed % 50 == 0 or completed == total:
+                    logger.info(lambda: f"Smart Selection: Palette extraction progress: {completed}/{total}")
+
+            results = extractor.extract_palettes_multiprocess(
+                filepaths,
+                progress_callback=progress_callback
+            )
+
+            # Convert successful results to PaletteRecords and batch insert
+            palette_records = []
+            for filepath, palette_data in results.items():
+                if palette_data:
+                    palette_records.append(create_palette_record(filepath, palette_data))
+
+            if palette_records:
+                self.smart_selector.db.upsert_palettes_batch(palette_records)
+                logger.info(lambda: f"Smart Selection: Extracted and stored {len(palette_records)} palettes")
+            else:
+                logger.debug(lambda: "Smart Selection: No palettes extracted successfully")
+
+        except Exception as e:
+            logger.warning(lambda: f"Smart Selection: Batch palette extraction failed: {e}")
+
     def download_one_from(self, downloader):
         # Check if source is locked out due to recent HTTP errors
         source_location = downloader.get_source_location()
@@ -1566,6 +1719,10 @@ class VarietyWindow(Gtk.Window):
         if file:
             self.register_downloaded_file(file)
             downloader.state["last_download_success"] = time.time()
+
+            # Index the image and extract palette for smart selection
+            # This ensures new images have luminosity data for time-based filtering
+            self._index_downloaded_image_with_palette(file)
 
             # Clear lockout on successful download
             if source_location:
@@ -3255,6 +3412,8 @@ class VarietyWindow(Gtk.Window):
 
                     if file:
                         self.register_downloaded_file(file)
+                        # Index and extract palette for smart selection
+                        self._index_downloaded_image_with_palette(file)
                         with self.prepared_lock:
                             logger.info(
                                 lambda: "Adding fetched file %s to used queue immediately after current file"

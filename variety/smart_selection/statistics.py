@@ -294,6 +294,18 @@ class CollectionStatistics:
 
         return "Distribution available"
 
+    def get_stale_count(self) -> int:
+        """Return count of stale images pending purge.
+
+        Stale images are those that have been soft-deleted (file missing)
+        but not yet permanently purged. They are excluded from selection
+        and statistics, but retained for 14 days to allow recovery.
+
+        Returns:
+            Number of stale images pending purge.
+        """
+        return self.db.count_stale_images()
+
     def get_all_stats(self) -> Dict[str, Any]:
         """Get all statistics in one call (for UI).
 

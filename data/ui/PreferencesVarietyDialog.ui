@@ -3557,13 +3557,14 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="width_request">200</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
+                        <property name="hexpand">True</property>
                         <property name="adjustment">smart_image_cooldown_adjustment</property>
                         <property name="draw_value">False</property>
                         <signal name="value-changed" handler="delayed_apply" swapped="no"/>
                         <signal name="value-changed" handler="on_smart_image_cooldown_changed" swapped="no"/>
                       </object>
                       <packing>
-                        <property name="expand">False</property>
+                        <property name="expand">True</property>
                         <property name="fill">True</property>
                         <property name="position">1</property>
                       </packing>
@@ -3618,13 +3619,14 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="width_request">200</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
+                        <property name="hexpand">True</property>
                         <property name="adjustment">smart_source_cooldown_adjustment</property>
                         <property name="draw_value">False</property>
                         <signal name="value-changed" handler="delayed_apply" swapped="no"/>
                         <signal name="value-changed" handler="on_smart_source_cooldown_changed" swapped="no"/>
                       </object>
                       <packing>
-                        <property name="expand">False</property>
+                        <property name="expand">True</property>
                         <property name="fill">True</property>
                         <property name="position">1</property>
                       </packing>
@@ -3679,13 +3681,14 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="width_request">200</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
+                        <property name="hexpand">True</property>
                         <property name="adjustment">smart_favorite_boost_adjustment</property>
                         <property name="draw_value">False</property>
                         <signal name="value-changed" handler="delayed_apply" swapped="no"/>
                         <signal name="value-changed" handler="on_smart_favorite_boost_changed" swapped="no"/>
                       </object>
                       <packing>
-                        <property name="expand">False</property>
+                        <property name="expand">True</property>
                         <property name="fill">True</property>
                         <property name="position">1</property>
                       </packing>
@@ -3740,13 +3743,14 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="width_request">200</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
+                        <property name="hexpand">True</property>
                         <property name="adjustment">smart_new_boost_adjustment</property>
                         <property name="draw_value">False</property>
                         <signal name="value-changed" handler="delayed_apply" swapped="no"/>
                         <signal name="value-changed" handler="on_smart_new_boost_changed" swapped="no"/>
                       </object>
                       <packing>
-                        <property name="expand">False</property>
+                        <property name="expand">True</property>
                         <property name="fill">True</property>
                         <property name="position">1</property>
                       </packing>
@@ -3933,13 +3937,14 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="width_request">200</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
+                        <property name="hexpand">True</property>
                         <property name="adjustment">smart_color_similarity_adjustment</property>
                         <property name="draw_value">False</property>
                         <signal name="value-changed" handler="delayed_apply" swapped="no"/>
                         <signal name="value-changed" handler="on_smart_color_similarity_changed" swapped="no"/>
                       </object>
                       <packing>
-                        <property name="expand">False</property>
+                        <property name="expand">True</property>
                         <property name="fill">True</property>
                         <property name="position">1</property>
                       </packing>
@@ -4936,6 +4941,23 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="position">2</property>
                       </packing>
                     </child>
+                    <child>
+                      <object class="GtkLabel" id="smart_stats_stale">
+                        <property name="visible">False</property>
+                        <property name="can_focus">False</property>
+                        <property name="halign">start</property>
+                        <property name="label" translatable="yes"></property>
+                        <property name="xalign">0</property>
+                        <style>
+                          <class name="dim-label"/>
+                        </style>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">3</property>
+                      </packing>
+                    </child>
                   </object>
                   <packing>
                     <property name="expand">False</property>
@@ -4987,11 +5009,11 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                     </child>
                     <child>
                       <object class="GtkButton" id="smart_extract_palettes">
-                        <property name="label" translatable="yes">Extract Palettes</property>
+                        <property name="label" translatable="yes">Extract Missing Palettes</property>
                         <property name="visible">True</property>
                         <property name="can_focus">True</property>
                         <property name="receives_default">True</property>
-                        <property name="tooltip_text" translatable="yes">Extract color palettes from all indexed images using wallust. Required for color-aware selection features. May take several minutes for large collections.</property>
+                        <property name="tooltip_text" translatable="yes">Extract color palettes for images that don't have them yet. Required for color-aware selection features. May take several minutes for large collections.</property>
                         <signal name="clicked" handler="on_smart_extract_palettes_clicked" swapped="no"/>
                       </object>
                       <packing>
@@ -5217,6 +5239,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                       <object class="GtkBox" id="wallhaven_box">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
+                        <property name="hexpand">True</property>
                         <property name="orientation">vertical</property>
                         <property name="spacing">10</property>
                         <property name="margin_left">15</property>
@@ -5280,6 +5303,8 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                           <object class="GtkScrolledWindow" id="wallhaven_tree_scrolled">
                             <property name="visible">True</property>
                             <property name="can_focus">True</property>
+                            <property name="hexpand">True</property>
+                            <property name="vexpand">True</property>
                             <property name="min_content_height">200</property>
                             <property name="shadow_type">in</property>
                             <child>

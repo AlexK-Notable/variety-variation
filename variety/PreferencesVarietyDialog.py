@@ -1969,10 +1969,21 @@ class PreferencesVarietyDialog(PreferencesDialog):
                         stats.get('unique_shown', 0)
                     )
                 )
+
+                # Update stale count - show only when there are stale images
+                stale_count = self.parent.smart_selector.db.count_stale_images()
+                if stale_count > 0:
+                    self.ui.smart_stats_stale.set_text(
+                        _("Stale: {} images (pending purge)").format(stale_count)
+                    )
+                    self.ui.smart_stats_stale.set_visible(True)
+                else:
+                    self.ui.smart_stats_stale.set_visible(False)
             else:
                 self.ui.smart_stats_indexed.set_text(_("Indexing..."))
                 self.ui.smart_stats_palettes.set_text(_("Images with palettes: 0 (0%)"))
                 self.ui.smart_stats_selections.set_text(_("Total selections: 0    Unique shown: 0"))
+                self.ui.smart_stats_stale.set_visible(False)
 
             # Update insights section
             self._update_insights_async()
@@ -3201,7 +3212,17 @@ class PreferencesVarietyDialog(PreferencesDialog):
         """Handle toggle of Wallhaven source enabled state."""
         model[path][0] = not model[path][0]
         location = model[path][2]  # The original query string
-        self.options.set_wallhaven_source_enabled(location, model[path][0])
+        enabled = model[path][0]
+        self.options.set_wallhaven_source_enabled(location, enabled)
+        # Also sync to main sources ListStore
+        main_model = self.ui.sources.get_model()
+        main_iter = main_model.get_iter_first()
+        while main_iter:
+            if (main_model[main_iter][1] == Options.SourceType.WALLHAVEN and
+                    main_model[main_iter][2] == location):
+                main_model[main_iter][0] = enabled
+                break
+            main_iter = main_model.iter_next(main_iter)
         self.delayed_apply()
 
     def on_wallhaven_entry_activate(self, entry):
@@ -3224,6 +3245,12 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         # Add the new Wallhaven source
         if self.options.add_wallhaven_source(search_term, enabled=True):
+            # Also add to main sources ListStore so apply() will persist it
+            self.ui.sources.get_model().append([
+                True,  # enabled
+                Options.SourceType.WALLHAVEN,  # type
+                search_term  # location
+            ])
             self._populate_wallhaven_list()
             self.delayed_apply()
             # Clear entry for next term (focus stays automatically)
@@ -3260,6 +3287,15 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
             if response == Gtk.ResponseType.YES:
                 self.options.remove_wallhaven_source(location)
+                # Also remove from main sources ListStore
+                main_model = self.ui.sources.get_model()
+                iter_to_remove = main_model.get_iter_first()
+                while iter_to_remove:
+                    if (main_model[iter_to_remove][1] == Options.SourceType.WALLHAVEN and
+                            main_model[iter_to_remove][2] == location):
+                        main_model.remove(iter_to_remove)
+                        break
+                    iter_to_remove = main_model.iter_next(iter_to_remove)
                 self._populate_wallhaven_list()
                 self.delayed_apply()
 
