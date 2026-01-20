@@ -1825,19 +1825,17 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 # Try to calculate based on location
                 if hasattr(self, '_location_lat') and hasattr(self, '_location_lon'):
                     try:
-                        from astral import LocationInfo
-                        from astral.sun import sun
+                        from variety.smart_selection.time_adapter import get_sun_times
                         import datetime as dt
 
-                        location = LocationInfo(
-                            latitude=self._location_lat,
-                            longitude=self._location_lon
+                        # get_sun_times returns times in local timezone
+                        sunrise, sunset = get_sun_times(
+                            self._location_lat,
+                            self._location_lon,
+                            dt.date.today()
                         )
-                        s = sun(location.observer, date=dt.date.today())
-                        sunrise = s['sunrise']
-                        sunset = s['sunset']
 
-                        # Update sun times display
+                        # Update sun times display (already in local time)
                         if hasattr(self.ui, 'smart_time_sun_status'):
                             self.ui.smart_time_sun_status.set_text(
                                 _("Sunrise: {}  Sunset: {}").format(
@@ -1847,11 +1845,8 @@ class PreferencesVarietyDialog(PreferencesDialog):
                             )
 
                         # Determine current period
-                        now = datetime.now()
-                        # Make sunrise/sunset timezone-aware or naive to match 'now'
-                        sunrise_naive = sunrise.replace(tzinfo=None)
-                        sunset_naive = sunset.replace(tzinfo=None)
-                        if sunrise_naive <= now <= sunset_naive:
+                        now = datetime.now().astimezone()
+                        if sunrise <= now <= sunset:
                             current_period = "day"
                         else:
                             current_period = "night"

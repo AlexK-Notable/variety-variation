@@ -204,15 +204,18 @@ def get_sun_times(lat: float, lon: float, date: datetime.date) -> Tuple[datetime
     Args:
         lat: Latitude of the location (-90 to 90).
         lon: Longitude of the location (-180 to 180).
-        date: The date to calculate sun times for.
+        date: The date to calculate sun times for (local date).
 
     Returns:
-        Tuple of (sunrise, sunset) as datetime objects.
+        Tuple of (sunrise, sunset) as datetime objects in local timezone.
     """
     if ASTRAL_AVAILABLE:
         try:
             location = LocationInfo(latitude=lat, longitude=lon)
-            s = sun(location.observer, date=date)
+            # Get local timezone for accurate date-based calculations
+            # Without tzinfo, astral returns UTC times which may cross date boundaries
+            local_tz = datetime.now().astimezone().tzinfo
+            s = sun(location.observer, date=date, tzinfo=local_tz)
             return s['sunrise'], s['sunset']
         except Exception as e:
             logger.warning(f"Astral calculation failed: {e}, using fallback")
@@ -365,17 +368,12 @@ class TimeAdapter:
             logger.warning("No location configured for sunrise/sunset, falling back to fixed")
             return self._get_period_fixed()
 
-        now = datetime.now()
         try:
-            sunrise, sunset = get_sun_times(lat, lon, now.date())
+            # get_sun_times returns times in local timezone
+            sunrise, sunset = get_sun_times(lat, lon, datetime.now().date())
+            now = datetime.now().astimezone()
 
-            # Make sure we compare with timezone-aware datetimes if needed
-            # astral may return timezone-aware datetimes
-            now_naive = now.replace(tzinfo=None)
-            sunrise_naive = sunrise.replace(tzinfo=None) if sunrise.tzinfo else sunrise
-            sunset_naive = sunset.replace(tzinfo=None) if sunset.tzinfo else sunset
-
-            if sunrise_naive <= now_naive < sunset_naive:
+            if sunrise <= now < sunset:
                 return "day"
             return "night"
         except Exception as e:
@@ -432,7 +430,7 @@ class TimeAdapter:
         """Calculate next transition for sunrise/sunset mode.
 
         Returns:
-            datetime of next sunrise or sunset.
+            datetime of next sunrise or sunset (in local time, naive).
         """
         lat = getattr(self.config, 'location_lat', None)
         lon = getattr(self.config, 'location_lon', None)
@@ -440,33 +438,28 @@ class TimeAdapter:
         if lat is None or lon is None:
             return self._get_next_transition_fixed()
 
-        now = datetime.now()
+        now = datetime.now().astimezone()
         today = now.date()
 
         try:
+            # get_sun_times returns times in local timezone
             sunrise, sunset = get_sun_times(lat, lon, today)
-
-            # Make naive for comparison
-            now_naive = now.replace(tzinfo=None)
-            sunrise_naive = sunrise.replace(tzinfo=None) if sunrise.tzinfo else sunrise
-            sunset_naive = sunset.replace(tzinfo=None) if sunset.tzinfo else sunset
-
             current_period = self.get_current_period()
 
             if current_period == "day":
                 # Next is sunset
-                if now_naive < sunset_naive:
-                    return sunset_naive
+                if now < sunset:
+                    return sunset.replace(tzinfo=None)
                 # Get tomorrow's sunrise
                 tomorrow_sunrise, _ = get_sun_times(lat, lon, today + timedelta(days=1))
-                return tomorrow_sunrise.replace(tzinfo=None) if tomorrow_sunrise.tzinfo else tomorrow_sunrise
+                return tomorrow_sunrise.replace(tzinfo=None)
             else:
                 # Next is sunrise
-                if now_naive < sunrise_naive:
-                    return sunrise_naive
+                if now < sunrise:
+                    return sunrise.replace(tzinfo=None)
                 # Get tomorrow's sunrise
                 tomorrow_sunrise, _ = get_sun_times(lat, lon, today + timedelta(days=1))
-                return tomorrow_sunrise.replace(tzinfo=None) if tomorrow_sunrise.tzinfo else tomorrow_sunrise
+                return tomorrow_sunrise.replace(tzinfo=None)
         except Exception as e:
             logger.warning(f"Failed to calculate next sun transition: {e}")
             return self._get_next_transition_fixed()
