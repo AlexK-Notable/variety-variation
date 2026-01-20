@@ -5511,11 +5511,12 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                       <object class="GtkBox" id="wallhaven_box">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
+                        <property name="halign">center</property>
                         <property name="hexpand">True</property>
                         <property name="orientation">vertical</property>
-                        <property name="spacing">10</property>
-                        <property name="margin_left">15</property>
-                        <property name="margin_right">15</property>
+                        <property name="spacing">12</property>
+                        <property name="margin_start">20</property>
+                        <property name="margin_end">20</property>
                         <property name="margin_top">10</property>
                         <property name="margin_bottom">10</property>
                         
@@ -5593,6 +5594,8 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                                 <child>
                                   <object class="GtkTreeViewColumn" id="wallhaven_enabled_col">
                                     <property name="title" translatable="yes">On</property>
+                                    <property name="clickable">True</property>
+                                    <property name="sort-column-id">0</property>
                                     <child>
                                       <object class="GtkCellRendererToggle" id="wallhaven_enabled_renderer" />
                                       <attributes>
@@ -5605,6 +5608,9 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                                   <object class="GtkTreeViewColumn" id="wallhaven_name_col">
                                     <property name="title" translatable="yes">Search Term</property>
                                     <property name="expand">True</property>
+                                    <property name="resizable">True</property>
+                                    <property name="clickable">True</property>
+                                    <property name="sort-column-id">1</property>
                                     <child>
                                       <object class="GtkCellRendererText" id="wallhaven_name_renderer" />
                                       <attributes>
@@ -5616,6 +5622,9 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                                 <child>
                                   <object class="GtkTreeViewColumn" id="wallhaven_count_col">
                                     <property name="title" translatable="yes">Images</property>
+                                    <property name="resizable">True</property>
+                                    <property name="clickable">True</property>
+                                    <property name="sort-column-id">3</property>
                                     <child>
                                       <object class="GtkCellRendererText" id="wallhaven_count_renderer" />
                                       <attributes>
@@ -5627,6 +5636,9 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                                 <child>
                                   <object class="GtkTreeViewColumn" id="wallhaven_shown_col">
                                     <property name="title" translatable="yes">Shown</property>
+                                    <property name="resizable">True</property>
+                                    <property name="clickable">True</property>
+                                    <property name="sort-column-id">4</property>
                                     <child>
                                       <object class="GtkCellRendererText" id="wallhaven_shown_renderer" />
                                       <attributes>
