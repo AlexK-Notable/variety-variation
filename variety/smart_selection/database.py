@@ -634,6 +634,80 @@ class ImageDatabase:
                 for row in cursor.fetchall()
             ]
 
+    def count_images_per_source(
+        self, source_prefix: Optional[str] = None
+    ) -> Dict[str, int]:
+        """Count images grouped by source_id.
+
+        Efficiently returns image counts per source without loading all records.
+        Useful for displaying statistics in the Wallhaven Manager UI.
+
+        Args:
+            source_prefix: Optional prefix to filter sources (e.g., 'wallhaven_'
+                to get only Wallhaven sources). Uses SQL LIKE with prefix%.
+
+        Returns:
+            Dict mapping source_id to image count.
+
+        Example:
+            # Get counts for all Wallhaven sources
+            counts = db.count_images_per_source('wallhaven_')
+            # {'wallhaven_abstract': 45, 'wallhaven_nature': 23}
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            if source_prefix:
+                cursor.execute('''
+                    SELECT source_id, COUNT(*) as count
+                    FROM images
+                    WHERE source_id LIKE ?
+                    GROUP BY source_id
+                ''', (f"{source_prefix}%",))
+            else:
+                cursor.execute('''
+                    SELECT source_id, COUNT(*) as count
+                    FROM images
+                    GROUP BY source_id
+                ''')
+            return {row['source_id']: row['count'] for row in cursor.fetchall()}
+
+    def get_source_shown_counts(
+        self, source_prefix: Optional[str] = None
+    ) -> Dict[str, int]:
+        """Get total times_shown aggregated by source_id.
+
+        Sums times_shown for all images grouped by source_id.
+        Useful for displaying selection statistics in the Wallhaven Manager UI.
+
+        Args:
+            source_prefix: Optional prefix to filter sources (e.g., 'wallhaven_'
+                to get only Wallhaven sources). Uses SQL LIKE with prefix%.
+
+        Returns:
+            Dict mapping source_id to total times_shown across all images.
+
+        Example:
+            # Get shown counts for all Wallhaven sources
+            counts = db.get_source_shown_counts('wallhaven_')
+            # {'wallhaven_abstract': 12, 'wallhaven_nature': 5}
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            if source_prefix:
+                cursor.execute('''
+                    SELECT source_id, SUM(times_shown) as total_shown
+                    FROM images
+                    WHERE source_id LIKE ?
+                    GROUP BY source_id
+                ''', (f"{source_prefix}%",))
+            else:
+                cursor.execute('''
+                    SELECT source_id, SUM(times_shown) as total_shown
+                    FROM images
+                    GROUP BY source_id
+                ''')
+            return {row['source_id']: row['total_shown'] or 0 for row in cursor.fetchall()}
+
     def record_source_shown(self, source_id: str):
         """Record that an image from a source was shown.
 

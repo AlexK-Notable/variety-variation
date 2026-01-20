@@ -196,6 +196,23 @@
     <signal name="row-deleted" handler="delayed_apply" swapped="no"/>
     <signal name="row-inserted" handler="delayed_apply" swapped="no"/>
   </object>
+  <object class="GtkListStore" id="wallhaven_liststore">
+    <columns>
+      <!-- column-name enabled -->
+      <column type="gboolean"/>
+      <!-- column-name display_name -->
+      <column type="gchararray"/>
+      <!-- column-name location (query/URL) -->
+      <column type="gchararray"/>
+      <!-- column-name image_count -->
+      <column type="gint"/>
+      <!-- column-name times_shown -->
+      <column type="gint"/>
+    </columns>
+    <signal name="row-changed" handler="delayed_apply" swapped="no"/>
+    <signal name="row-deleted" handler="delayed_apply" swapped="no"/>
+    <signal name="row-inserted" handler="delayed_apply" swapped="no"/>
+  </object>
   <object class="GtkTextBuffer" id="tips_buffer"/>
   <object class="PreferencesVarietyDialog" id="preferences_variety_dialog">
     <property name="width_request">850</property>
@@ -3456,13 +3473,24 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
             </child>
             <!-- Smart Selection Tab -->
             <child>
-              <object class="GtkBox" id="smart_selection_box">
+              <object class="GtkScrolledWindow" id="smart_selection_scrolled">
                 <property name="visible">True</property>
-                <property name="can_focus">False</property>
-                <property name="valign">start</property>
-                <property name="vexpand">True</property>
-                <property name="orientation">vertical</property>
-                <property name="spacing">5</property>
+                <property name="can_focus">True</property>
+                <property name="hscrollbar_policy">never</property>
+                <property name="vscrollbar_policy">automatic</property>
+                <property name="shadow_type">none</property>
+                <child>
+                  <object class="GtkViewport" id="smart_selection_viewport">
+                    <property name="visible">True</property>
+                    <property name="can_focus">False</property>
+                    <child>
+                      <object class="GtkBox" id="smart_selection_box">
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="valign">start</property>
+                        <property name="vexpand">True</property>
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">5</property>
                 <!-- Enable Smart Selection -->
                 <child>
                   <object class="GtkCheckButton" id="smart_selection_enabled">
@@ -4790,7 +4818,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                         <property name="label" translatable="yes">Templates: 0 configured</property>
                       </object>
                       <packing>
-                        <property name="expand">True</property>
+                        <property name="expand">False</property>
                         <property name="fill">True</property>
                         <property name="position">0</property>
                       </packing>
@@ -5005,12 +5033,13 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                     <property name="spacing">10</property>
                     <child>
                       <object class="GtkProgressBar" id="smart_extraction_progress">
+                        <property name="width_request">400</property>
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
                         <property name="show_text">True</property>
                       </object>
                       <packing>
-                        <property name="expand">True</property>
+                        <property name="expand">False</property>
                         <property name="fill">True</property>
                         <property name="position">0</property>
                       </packing>
@@ -5037,6 +5066,35 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                     <property name="position">22</property>
                   </packing>
                 </child>
+                <!-- Rebuild Progress Section -->
+                <child>
+                  <object class="GtkBox" id="smart_rebuild_progress_box">
+                    <property name="visible">False</property>
+                    <property name="can_focus">False</property>
+                    <property name="margin_left">15</property>
+                    <property name="margin_right">15</property>
+                    <property name="margin_top">5</property>
+                    <property name="spacing">10</property>
+                    <child>
+                      <object class="GtkProgressBar" id="smart_rebuild_progress">
+                        <property name="width_request">400</property>
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="show_text">True</property>
+                      </object>
+                      <packing>
+                        <property name="expand">False</property>
+                        <property name="fill">True</property>
+                        <property name="position">0</property>
+                      </packing>
+                    </child>
+                  </object>
+                  <packing>
+                    <property name="expand">False</property>
+                    <property name="fill">True</property>
+                    <property name="position">23</property>
+                  </packing>
+                </child>
                 <!-- Preview Section - Simple button to open popout window -->
                 <child>
                   <object class="GtkSeparator">
@@ -5047,7 +5105,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">23</property>
+                    <property name="position">24</property>
                   </packing>
                 </child>
                 <child>
@@ -5121,8 +5179,12 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                   <packing>
                     <property name="expand">False</property>
                     <property name="fill">True</property>
-                    <property name="position">24</property>
+                    <property name="position">25</property>
                   </packing>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
                 </child>
               </object>
               <packing>
@@ -5137,6 +5199,246 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
               </object>
               <packing>
                 <property name="position">7</property>
+                <property name="tab_fill">False</property>
+              </packing>
+            </child>
+            <!-- Wallhaven Manager Tab -->
+            <child>
+              <object class="GtkScrolledWindow" id="wallhaven_scrolled">
+                <property name="visible">True</property>
+                <property name="can_focus">True</property>
+                <property name="hscrollbar_policy">never</property>
+                <property name="vscrollbar_policy">automatic</property>
+                <child>
+                  <object class="GtkViewport" id="wallhaven_viewport">
+                    <property name="visible">True</property>
+                    <property name="can_focus">False</property>
+                    <child>
+                      <object class="GtkBox" id="wallhaven_box">
+                        <property name="visible">True</property>
+                        <property name="can_focus">False</property>
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">10</property>
+                        <property name="margin_left">15</property>
+                        <property name="margin_right">15</property>
+                        <property name="margin_top">10</property>
+                        <property name="margin_bottom">10</property>
+                        <!-- Header -->
+                        <child>
+                          <object class="GtkLabel" id="wallhaven_header">
+                            <property name="visible">True</property>
+                            <property name="can_focus">False</property>
+                            <property name="halign">start</property>
+                            <property name="label" translatable="yes">Wallhaven Search Terms</property>
+                            <attributes>
+                              <attribute name="weight" value="bold"/>
+                              <attribute name="scale" value="1.2"/>
+                            </attributes>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">0</property>
+                          </packing>
+                        </child>
+                        <!-- Description -->
+                        <child>
+                          <object class="GtkLabel" id="wallhaven_description">
+                            <property name="visible">True</property>
+                            <property name="can_focus">False</property>
+                            <property name="halign">start</property>
+                            <property name="label" translatable="yes">Manage your Wallhaven search terms. Each term is treated as a separate source for wallpaper selection diversity.</property>
+                            <property name="wrap">True</property>
+                            <property name="xalign">0</property>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">1</property>
+                          </packing>
+                        </child>
+                        <!-- TreeView in ScrolledWindow -->
+                        <child>
+                          <object class="GtkScrolledWindow" id="wallhaven_tree_scrolled">
+                            <property name="visible">True</property>
+                            <property name="can_focus">True</property>
+                            <property name="min_content_height">200</property>
+                            <property name="shadow_type">in</property>
+                            <child>
+                              <object class="GtkTreeView" id="wallhaven_tree">
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <property name="model">wallhaven_liststore</property>
+                                <child internal-child="selection">
+                                  <object class="GtkTreeSelection" id="wallhaven_selection">
+                                    <property name="mode">single</property>
+                                    <signal name="changed" handler="on_wallhaven_selection_changed" swapped="no"/>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkTreeViewColumn" id="wallhaven_enabled_col">
+                                    <property name="title" translatable="yes">On</property>
+                                    <child>
+                                      <object class="GtkCellRendererToggle" id="wallhaven_enabled_renderer"/>
+                                      <attributes>
+                                        <attribute name="active">0</attribute>
+                                      </attributes>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkTreeViewColumn" id="wallhaven_name_col">
+                                    <property name="title" translatable="yes">Search Term</property>
+                                    <property name="expand">True</property>
+                                    <child>
+                                      <object class="GtkCellRendererText" id="wallhaven_name_renderer"/>
+                                      <attributes>
+                                        <attribute name="text">1</attribute>
+                                      </attributes>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkTreeViewColumn" id="wallhaven_count_col">
+                                    <property name="title" translatable="yes">Images</property>
+                                    <child>
+                                      <object class="GtkCellRendererText" id="wallhaven_count_renderer"/>
+                                      <attributes>
+                                        <attribute name="text">3</attribute>
+                                      </attributes>
+                                    </child>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkTreeViewColumn" id="wallhaven_shown_col">
+                                    <property name="title" translatable="yes">Shown</property>
+                                    <child>
+                                      <object class="GtkCellRendererText" id="wallhaven_shown_renderer"/>
+                                      <attributes>
+                                        <attribute name="text">4</attribute>
+                                      </attributes>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="expand">True</property>
+                            <property name="fill">True</property>
+                            <property name="position">2</property>
+                          </packing>
+                        </child>
+                        <!-- Button Box -->
+                        <child>
+                          <object class="GtkBox" id="wallhaven_button_box">
+                            <property name="visible">True</property>
+                            <property name="can_focus">False</property>
+                            <property name="spacing">10</property>
+                            <child>
+                              <object class="GtkButton" id="wallhaven_add_button">
+                                <property name="label" translatable="yes">Add Search Term...</property>
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <signal name="clicked" handler="on_wallhaven_add_clicked" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">0</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="wallhaven_remove_button">
+                                <property name="label" translatable="yes">Remove</property>
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <property name="sensitive">False</property>
+                                <signal name="clicked" handler="on_wallhaven_remove_clicked" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">1</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="wallhaven_refresh_button">
+                                <property name="label" translatable="yes">Refresh Stats</property>
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <signal name="clicked" handler="on_wallhaven_refresh_clicked" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">2</property>
+                              </packing>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">3</property>
+                          </packing>
+                        </child>
+                        <!-- API Key Section -->
+                        <child>
+                          <object class="GtkBox" id="wallhaven_apikey_box">
+                            <property name="visible">True</property>
+                            <property name="can_focus">False</property>
+                            <property name="margin_top">15</property>
+                            <property name="spacing">5</property>
+                            <child>
+                              <object class="GtkLabel" id="wallhaven_apikey_label">
+                                <property name="visible">True</property>
+                                <property name="can_focus">False</property>
+                                <property name="label" translatable="yes">API Key (for NSFW):</property>
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">0</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkEntry" id="wallhaven_apikey">
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <property name="max_width_chars">40</property>
+                                <property name="placeholder_text" translatable="yes">Optional - Get from wallhaven.cc/settings/account</property>
+                                <signal name="changed" handler="on_wallhaven_apikey_changed" swapped="no"/>
+                              </object>
+                              <packing>
+                                <property name="expand">True</property>
+                                <property name="fill">True</property>
+                                <property name="position">1</property>
+                              </packing>
+                            </child>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">4</property>
+                          </packing>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+              <packing>
+                <property name="position">8</property>
+              </packing>
+            </child>
+            <child type="tab">
+              <object class="GtkLabel" id="wallhaven_tab_label">
+                <property name="visible">True</property>
+                <property name="can_focus">False</property>
+                <property name="label" translatable="yes">Wallhaven</property>
+              </object>
+              <packing>
+                <property name="position">8</property>
                 <property name="tab_fill">False</property>
               </packing>
             </child>
@@ -5622,7 +5924,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                 </child>
               </object>
               <packing>
-                <property name="position">8</property>
+                <property name="position">9</property>
               </packing>
             </child>
             <child type="tab">
@@ -5632,7 +5934,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                 <property name="label" translatable="yes">Customize</property>
               </object>
               <packing>
-                <property name="position">8</property>
+                <property name="position">9</property>
                 <property name="tab_fill">False</property>
               </packing>
             </child>
@@ -5799,7 +6101,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                 </child>
               </object>
               <packing>
-                <property name="position">9</property>
+                <property name="position">10</property>
               </packing>
             </child>
             <child type="tab">
@@ -5809,7 +6111,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                 <property name="label" translatable="yes">Tips</property>
               </object>
               <packing>
-                <property name="position">9</property>
+                <property name="position">10</property>
                 <property name="tab_fill">False</property>
               </packing>
             </child>
@@ -5976,7 +6278,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                 </child>
               </object>
               <packing>
-                <property name="position">10</property>
+                <property name="position">11</property>
               </packing>
             </child>
             <child type="tab">
@@ -5986,7 +6288,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                 <property name="label" translatable="yes">Changelog</property>
               </object>
               <packing>
-                <property name="position">10</property>
+                <property name="position">11</property>
                 <property name="tab_fill">False</property>
               </packing>
             </child>
@@ -6102,7 +6404,7 @@ Peter Levi</property>
                 </child>
               </object>
               <packing>
-                <property name="position">11</property>
+                <property name="position">12</property>
               </packing>
             </child>
             <child type="tab">
@@ -6112,7 +6414,7 @@ Peter Levi</property>
                 <property name="label" translatable="yes">Donate</property>
               </object>
               <packing>
-                <property name="position">11</property>
+                <property name="position">12</property>
                 <property name="tab_fill">False</property>
               </packing>
             </child>

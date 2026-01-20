@@ -310,5 +310,316 @@ class TestIndexerStatistics(unittest.TestCase):
             self.assertIn('images_with_palettes', stats)
 
 
+class TestSourceTypeDetection(unittest.TestCase):
+    """Tests for _detect_source_type method.
+
+    This test class verifies the fix for the wallhaven_* source type bug.
+    Previously, sources like 'wallhaven_abstract' were incorrectly classified
+    as 'local' instead of 'remote'.
+    """
+
+    def setUp(self):
+        """Create temporary directory and indexer."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _get_indexer(self):
+        """Create and return an ImageIndexer instance."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        db = ImageDatabase(self.db_path)
+        return ImageIndexer(db), db
+
+    def test_exact_wallhaven_returns_remote(self):
+        """Source 'wallhaven' (exact match) returns 'remote'."""
+        indexer, db = self._get_indexer()
+        try:
+            result = indexer._detect_source_type('wallhaven')
+            self.assertEqual(result, 'remote')
+        finally:
+            db.close()
+
+    def test_wallhaven_prefix_returns_remote(self):
+        """Source 'wallhaven_landscape' (prefix) returns 'remote'.
+
+        This is the key test for the wallhaven_* bug fix.
+        """
+        indexer, db = self._get_indexer()
+        try:
+            result = indexer._detect_source_type('wallhaven_landscape')
+            self.assertEqual(result, 'remote')
+        finally:
+            db.close()
+
+    def test_wallhaven_with_query_returns_remote(self):
+        """Source 'wallhaven_nature+mountains' returns 'remote'."""
+        indexer, db = self._get_indexer()
+        try:
+            result = indexer._detect_source_type('wallhaven_nature+mountains')
+            self.assertEqual(result, 'remote')
+        finally:
+            db.close()
+
+    def test_wallhaven_abstract_returns_remote(self):
+        """Source 'wallhaven_abstract' returns 'remote'."""
+        indexer, db = self._get_indexer()
+        try:
+            result = indexer._detect_source_type('wallhaven_abstract')
+            self.assertEqual(result, 'remote')
+        finally:
+            db.close()
+
+    def test_wallhaven_case_insensitive(self):
+        """Source detection is case insensitive."""
+        indexer, db = self._get_indexer()
+        try:
+            self.assertEqual(indexer._detect_source_type('Wallhaven'), 'remote')
+            self.assertEqual(indexer._detect_source_type('WALLHAVEN_Abstract'), 'remote')
+        finally:
+            db.close()
+
+    def test_other_remote_sources(self):
+        """Other remote sources return 'remote'."""
+        indexer, db = self._get_indexer()
+        try:
+            self.assertEqual(indexer._detect_source_type('unsplash'), 'remote')
+            self.assertEqual(indexer._detect_source_type('reddit'), 'remote')
+            self.assertEqual(indexer._detect_source_type('flickr'), 'remote')
+            self.assertEqual(indexer._detect_source_type('bing'), 'remote')
+            self.assertEqual(indexer._detect_source_type('earthview'), 'remote')
+        finally:
+            db.close()
+
+    def test_remote_prefixes(self):
+        """Remote source prefixes return 'remote'."""
+        indexer, db = self._get_indexer()
+        try:
+            self.assertEqual(indexer._detect_source_type('reddit_wallpapers'), 'remote')
+            self.assertEqual(indexer._detect_source_type('flickr_nature'), 'remote')
+            self.assertEqual(indexer._detect_source_type('unsplash_photos'), 'remote')
+        finally:
+            db.close()
+
+    def test_favorites_returns_favorites(self):
+        """Favorites folders return 'favorites'."""
+        indexer, db = self._get_indexer()
+        try:
+            self.assertEqual(indexer._detect_source_type('favorites'), 'favorites')
+            self.assertEqual(indexer._detect_source_type('Favorites'), 'favorites')
+            self.assertEqual(indexer._detect_source_type('faves'), 'favorites')
+        finally:
+            db.close()
+
+    def test_local_folders_return_local(self):
+        """Generic local folders return 'local'."""
+        indexer, db = self._get_indexer()
+        try:
+            self.assertEqual(indexer._detect_source_type('my_photos'), 'local')
+            self.assertEqual(indexer._detect_source_type('vacation'), 'local')
+            self.assertEqual(indexer._detect_source_type('backgrounds'), 'local')
+        finally:
+            db.close()
+
+    def test_wallhaven_in_middle_returns_local(self):
+        """Source with 'wallhaven' in middle (not prefix) returns 'local'."""
+        indexer, db = self._get_indexer()
+        try:
+            # 'backup_wallhaven' should NOT be detected as remote
+            result = indexer._detect_source_type('backup_wallhaven')
+            self.assertEqual(result, 'local')
+        finally:
+            db.close()
+
+
+class TestCountImagesPerSource(unittest.TestCase):
+    """Tests for count_images_per_source database method."""
+
+    def setUp(self):
+        """Create temporary directory with test images in multiple sources."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+        # Create source directories
+        self.wallhaven_abstract = os.path.join(self.temp_dir, 'wallhaven_abstract')
+        self.wallhaven_nature = os.path.join(self.temp_dir, 'wallhaven_nature')
+        self.unsplash = os.path.join(self.temp_dir, 'unsplash')
+
+        os.makedirs(self.wallhaven_abstract)
+        os.makedirs(self.wallhaven_nature)
+        os.makedirs(self.unsplash)
+
+        # Create test images
+        for i in range(3):
+            self._create_test_image(os.path.join(self.wallhaven_abstract, f'img{i}.jpg'))
+        for i in range(5):
+            self._create_test_image(os.path.join(self.wallhaven_nature, f'img{i}.jpg'))
+        for i in range(2):
+            self._create_test_image(os.path.join(self.unsplash, f'img{i}.jpg'))
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _create_test_image(self, path: str):
+        """Create a simple test image."""
+        img = Image.new('RGB', (100, 100), color='blue')
+        img.save(path)
+
+    def test_count_all_sources(self):
+        """count_images_per_source without prefix returns all sources."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            indexer = ImageIndexer(db)
+            indexer.index_directory(self.wallhaven_abstract)
+            indexer.index_directory(self.wallhaven_nature)
+            indexer.index_directory(self.unsplash)
+
+            counts = db.count_images_per_source()
+
+            self.assertEqual(counts['wallhaven_abstract'], 3)
+            self.assertEqual(counts['wallhaven_nature'], 5)
+            self.assertEqual(counts['unsplash'], 2)
+
+    def test_count_with_prefix_filter(self):
+        """count_images_per_source with prefix filters correctly."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            indexer = ImageIndexer(db)
+            indexer.index_directory(self.wallhaven_abstract)
+            indexer.index_directory(self.wallhaven_nature)
+            indexer.index_directory(self.unsplash)
+
+            # Only Wallhaven sources
+            wallhaven_counts = db.count_images_per_source('wallhaven_')
+
+            self.assertEqual(len(wallhaven_counts), 2)
+            self.assertEqual(wallhaven_counts['wallhaven_abstract'], 3)
+            self.assertEqual(wallhaven_counts['wallhaven_nature'], 5)
+            self.assertNotIn('unsplash', wallhaven_counts)
+
+    def test_count_nonexistent_prefix_returns_empty(self):
+        """count_images_per_source with non-matching prefix returns empty dict."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            indexer = ImageIndexer(db)
+            indexer.index_directory(self.wallhaven_abstract)
+
+            counts = db.count_images_per_source('nonexistent_')
+
+            self.assertEqual(counts, {})
+
+    def test_count_empty_database(self):
+        """count_images_per_source on empty database returns empty dict."""
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            counts = db.count_images_per_source()
+            self.assertEqual(counts, {})
+
+
+class TestGetSourceShownCounts(unittest.TestCase):
+    """Tests for get_source_shown_counts database method."""
+
+    def setUp(self):
+        """Create temporary directory with test images."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+
+        # Create source directories
+        self.wallhaven_abstract = os.path.join(self.temp_dir, 'wallhaven_abstract')
+        self.unsplash = os.path.join(self.temp_dir, 'unsplash')
+
+        os.makedirs(self.wallhaven_abstract)
+        os.makedirs(self.unsplash)
+
+        # Create test images
+        for i in range(3):
+            img = Image.new('RGB', (100, 100), color='blue')
+            img.save(os.path.join(self.wallhaven_abstract, f'img{i}.jpg'))
+        for i in range(2):
+            img = Image.new('RGB', (100, 100), color='green')
+            img.save(os.path.join(self.unsplash, f'img{i}.jpg'))
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_shown_counts_zero_initially(self):
+        """get_source_shown_counts returns 0 for unshown images."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            indexer = ImageIndexer(db)
+            indexer.index_directory(self.wallhaven_abstract)
+            indexer.index_directory(self.unsplash)
+
+            counts = db.get_source_shown_counts()
+
+            self.assertEqual(counts.get('wallhaven_abstract', 0), 0)
+            self.assertEqual(counts.get('unsplash', 0), 0)
+
+    def test_shown_counts_after_recording(self):
+        """get_source_shown_counts reflects recorded shows."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            indexer = ImageIndexer(db)
+            indexer.index_directory(self.wallhaven_abstract)
+            indexer.index_directory(self.unsplash)
+
+            # Record some images as shown
+            images = list(db.get_all_images())
+            wallhaven_images = [img for img in images if img.source_id == 'wallhaven_abstract']
+            unsplash_images = [img for img in images if img.source_id == 'unsplash']
+
+            # Show 2 wallhaven images multiple times
+            db.record_image_shown(wallhaven_images[0].filepath)
+            db.record_image_shown(wallhaven_images[0].filepath)  # twice
+            db.record_image_shown(wallhaven_images[1].filepath)
+
+            # Show 1 unsplash image once
+            db.record_image_shown(unsplash_images[0].filepath)
+
+            counts = db.get_source_shown_counts()
+
+            self.assertEqual(counts['wallhaven_abstract'], 3)  # 2 + 1
+            self.assertEqual(counts['unsplash'], 1)
+
+    def test_shown_counts_with_prefix_filter(self):
+        """get_source_shown_counts with prefix filters correctly."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.database import ImageDatabase
+
+        with ImageDatabase(self.db_path) as db:
+            indexer = ImageIndexer(db)
+            indexer.index_directory(self.wallhaven_abstract)
+            indexer.index_directory(self.unsplash)
+
+            # Record some images as shown
+            images = list(db.get_all_images())
+            for img in images:
+                db.record_image_shown(img.filepath)
+
+            # Only Wallhaven sources
+            wallhaven_counts = db.get_source_shown_counts('wallhaven_')
+
+            self.assertEqual(len(wallhaven_counts), 1)
+            self.assertEqual(wallhaven_counts['wallhaven_abstract'], 3)
+            self.assertNotIn('unsplash', wallhaven_counts)
+
+
 if __name__ == '__main__':
     unittest.main()

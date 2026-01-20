@@ -241,15 +241,22 @@ class ImageIndexer:
             source_id: Source identifier (usually directory name).
 
         Returns:
-            Source type string.
+            Source type string: 'remote', 'favorites', or 'local'.
         """
-        # Known remote sources
+        source_lower = source_id.lower()
+
+        # Known remote sources (exact match)
         remote_sources = {'unsplash', 'wallhaven', 'reddit', 'flickr', 'bing', 'earthview'}
-        if source_id.lower() in remote_sources:
+        if source_lower in remote_sources:
+            return 'remote'
+
+        # Remote source prefixes (for search-term-specific folders like wallhaven_abstract)
+        remote_prefixes = ('wallhaven_', 'reddit_', 'flickr_', 'unsplash_')
+        if any(source_lower.startswith(prefix) for prefix in remote_prefixes):
             return 'remote'
 
         # Check for favorites
-        if source_id.lower() in {'favorites', 'faves'}:
+        if source_lower in {'favorites', 'faves'}:
             return 'favorites'
 
         return 'local'

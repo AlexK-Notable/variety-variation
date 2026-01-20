@@ -506,6 +506,10 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self._setup_smart_selection_tooltips()
             self._connect_help_buttons()
 
+            # Setup Wallhaven Manager tab
+            self._setup_wallhaven_tab()
+            self._populate_wallhaven_list()
+
             self.ui.tips_buffer.set_text(
                 "\n\n".join(
                     [
@@ -3117,3 +3121,174 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         self._preview_refresh_timer = threading.Timer(0.5, _do_refresh)
         self._preview_refresh_timer.start()
+
+    # =========================================================================
+    # Wallhaven Manager Tab
+    # =========================================================================
+
+    def _setup_wallhaven_tab(self):
+        """Set up Wallhaven tab toggle handler - called once from reload()."""
+        if not hasattr(self, "_wallhaven_toggle_handler_id"):
+            self._wallhaven_toggle_handler_id = self.ui.wallhaven_enabled_renderer.connect(
+                "toggled", self._on_wallhaven_enabled_toggled, self.ui.wallhaven_liststore
+            )
+
+    def _populate_wallhaven_list(self):
+        """Populate the Wallhaven list with sources and statistics."""
+        self.ui.wallhaven_liststore.clear()
+
+        # Get Wallhaven sources from options
+        wallhaven_sources = self.options.get_wallhaven_sources()
+
+        # Get image counts from smart selection database if available
+        image_counts = {}
+        shown_counts = {}
+        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+            try:
+                db = self.parent.smart_selector.db
+                # Get per-source image counts
+                image_counts = db.count_images_per_source('wallhaven_')
+                # Get times_shown aggregates per source
+                shown_counts = db.get_source_shown_counts('wallhaven_')
+            except Exception as e:
+                logger.warning(lambda: f"Failed to get Wallhaven stats: {e}")
+
+        # Populate the list
+        for source in wallhaven_sources:
+            enabled = source[0]
+            location = source[2]  # The search query
+
+            # Extract display name from location (the search term)
+            display_name = location
+
+            # Convert location to source_id format (wallhaven_<query>)
+            source_id = f"wallhaven_{location.lower().replace(' ', '_')}"
+
+            # Get counts for this source
+            img_count = image_counts.get(source_id, 0)
+            times_shown = shown_counts.get(source_id, 0)
+
+            # Add row: enabled, display_name, location, image_count, times_shown
+            self.ui.wallhaven_liststore.append([enabled, display_name, location, img_count, times_shown])
+
+        # Load API key if present
+        if hasattr(self.options, 'wallhaven_api_key'):
+            self.ui.wallhaven_apikey.set_text(self.options.wallhaven_api_key or "")
+
+    def on_wallhaven_selection_changed(self, selection=None):
+        """Handle Wallhaven list selection change - enable/disable Remove button."""
+        model, tree_iter = self.ui.wallhaven_selection.get_selected()
+        has_selection = tree_iter is not None
+        self.ui.wallhaven_remove_button.set_sensitive(has_selection)
+
+    def _on_wallhaven_enabled_toggled(self, widget, path, model):
+        """Handle toggle of Wallhaven source enabled state."""
+        model[path][0] = not model[path][0]
+        location = model[path][2]  # The original query string
+        self.options.set_wallhaven_source_enabled(location, model[path][0])
+        self.delayed_apply()
+
+    def on_wallhaven_add_clicked(self, widget=None):
+        """Show dialog to add a new Wallhaven search term."""
+        dialog = Gtk.Dialog(
+            title=_("Add Wallhaven Search Term"),
+            parent=self,
+            modal=True,
+            destroy_with_parent=True,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK
+        )
+
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        content.set_margin_start(15)
+        content.set_margin_end(15)
+        content.set_margin_top(10)
+        content.set_margin_bottom(10)
+
+        # Label
+        label = Gtk.Label(label=_("Enter a Wallhaven search term:"))
+        label.set_halign(Gtk.Align.START)
+        content.pack_start(label, False, False, 0)
+
+        # Entry
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(_("e.g., abstract, nature, minimalist"))
+        entry.set_activates_default(True)
+        content.pack_start(entry, False, False, 0)
+
+        # Help text
+        help_label = Gtk.Label(label=_(
+            "Tip: Use Wallhaven search syntax for advanced queries.\n"
+            "Examples: 'nature +forest', 'id:123456', 'like:your_username'"
+        ))
+        help_label.set_halign(Gtk.Align.START)
+        help_label.get_style_context().add_class("dim-label")
+        content.pack_start(help_label, False, False, 5)
+
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+
+        response = dialog.run()
+        search_term = entry.get_text().strip()
+        dialog.destroy()
+
+        if response == Gtk.ResponseType.OK and search_term:
+            # Add the new Wallhaven source
+            if self.options.add_wallhaven_source(search_term, enabled=True):
+                self._populate_wallhaven_list()
+                self.delayed_apply()
+            else:
+                # Source already exists
+                error_dialog = Gtk.MessageDialog(
+                    parent=self,
+                    modal=True,
+                    message_type=Gtk.MessageType.INFO,
+                    buttons=Gtk.ButtonsType.OK,
+                    text=_("Search term already exists"),
+                )
+                error_dialog.format_secondary_text(
+                    _("The search term '{}' is already in your list.").format(search_term)
+                )
+                error_dialog.run()
+                error_dialog.destroy()
+
+    def on_wallhaven_remove_clicked(self, widget=None):
+        """Remove the selected Wallhaven search term."""
+        model, tree_iter = self.ui.wallhaven_selection.get_selected()
+        if tree_iter:
+            location = model[tree_iter][2]  # The original query string
+            display_name = model[tree_iter][1]
+
+            # Confirm removal
+            dialog = Gtk.MessageDialog(
+                parent=self,
+                modal=True,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text=_("Remove Wallhaven search term?"),
+            )
+            dialog.format_secondary_text(
+                _("Remove '{}' from your Wallhaven sources?\n\n"
+                  "This will not delete any downloaded images.").format(display_name)
+            )
+            response = dialog.run()
+            dialog.destroy()
+
+            if response == Gtk.ResponseType.YES:
+                self.options.remove_wallhaven_source(location)
+                self._populate_wallhaven_list()
+                self.delayed_apply()
+
+    def on_wallhaven_refresh_clicked(self, widget=None):
+        """Refresh Wallhaven statistics from the database."""
+        self._populate_wallhaven_list()
+
+    def on_wallhaven_apikey_changed(self, widget=None):
+        """Handle Wallhaven API key change."""
+        if self.loading:
+            return
+        self.options.wallhaven_api_key = self.ui.wallhaven_apikey.get_text().strip()
+        self.delayed_apply()

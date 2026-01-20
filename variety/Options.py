@@ -792,6 +792,62 @@ class Options:
     def get_configurable_plugin_source_types():
         return set(dl.get_source_type() for dl in Options.CONFIGURABLE_IMAGE_SOURCES)
 
+    def get_wallhaven_sources(self):
+        """Get all Wallhaven sources from the sources list.
+
+        Returns:
+            List of [enabled, type, location] entries where type is 'wallhaven'.
+        """
+        return [s for s in self.sources if s[1] == Options.SourceType.WALLHAVEN]
+
+    def set_wallhaven_source_enabled(self, location, enabled):
+        """Set the enabled state of a Wallhaven source by its location.
+
+        Args:
+            location: The Wallhaven query/URL identifying the source.
+            enabled: Whether the source should be enabled.
+
+        Returns:
+            True if source was found and updated, False otherwise.
+        """
+        for source in self.sources:
+            if source[1] == Options.SourceType.WALLHAVEN and source[2] == location:
+                source[0] = enabled
+                return True
+        return False
+
+    def remove_wallhaven_source(self, location):
+        """Remove a Wallhaven source by its location.
+
+        Args:
+            location: The Wallhaven query/URL identifying the source.
+
+        Returns:
+            True if source was found and removed, False otherwise.
+        """
+        for i, source in enumerate(self.sources):
+            if source[1] == Options.SourceType.WALLHAVEN and source[2] == location:
+                del self.sources[i]
+                return True
+        return False
+
+    def add_wallhaven_source(self, location, enabled=True):
+        """Add a new Wallhaven source.
+
+        Args:
+            location: The Wallhaven query/URL for the source.
+            enabled: Whether the source should be enabled (default True).
+
+        Returns:
+            True if source was added, False if it already exists.
+        """
+        # Check if already exists
+        for source in self.sources:
+            if source[1] == Options.SourceType.WALLHAVEN and source[2] == location:
+                return False
+        self.sources.append([enabled, Options.SourceType.WALLHAVEN, location])
+        return True
+
     def set_defaults(self):
         self.change_enabled = True
         self.change_on_start = False
