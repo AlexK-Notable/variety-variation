@@ -234,7 +234,8 @@ class ImageIndexer:
 
         return indexed_count
 
-    def _detect_source_type(self, source_id: str) -> str:
+    @staticmethod
+    def _detect_source_type(source_id: str) -> str:
         """Detect the type of source from its ID.
 
         Args:

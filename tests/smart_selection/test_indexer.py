@@ -311,129 +311,75 @@ class TestIndexerStatistics(unittest.TestCase):
 
 
 class TestSourceTypeDetection(unittest.TestCase):
-    """Tests for _detect_source_type method.
+    """Tests for _detect_source_type static method.
 
     This test class verifies the fix for the wallhaven_* source type bug.
     Previously, sources like 'wallhaven_abstract' were incorrectly classified
     as 'local' instead of 'remote'.
+
+    Note: _detect_source_type is a static method that doesn't require
+    database access, so these tests are fast and have no cleanup needed.
     """
 
-    def setUp(self):
-        """Create temporary directory and indexer."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.db_path = os.path.join(self.temp_dir, 'test.db')
-
-    def tearDown(self):
-        """Clean up temporary directory."""
-        shutil.rmtree(self.temp_dir)
-
-    def _get_indexer(self):
-        """Create and return an ImageIndexer instance."""
+    def _detect(self, source_id):
+        """Helper to call the static method."""
         from variety.smart_selection.indexer import ImageIndexer
-        from variety.smart_selection.database import ImageDatabase
-
-        db = ImageDatabase(self.db_path)
-        return ImageIndexer(db), db
+        return ImageIndexer._detect_source_type(source_id)
 
     def test_exact_wallhaven_returns_remote(self):
         """Source 'wallhaven' (exact match) returns 'remote'."""
-        indexer, db = self._get_indexer()
-        try:
-            result = indexer._detect_source_type('wallhaven')
-            self.assertEqual(result, 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('wallhaven'), 'remote')
 
     def test_wallhaven_prefix_returns_remote(self):
         """Source 'wallhaven_landscape' (prefix) returns 'remote'.
 
         This is the key test for the wallhaven_* bug fix.
         """
-        indexer, db = self._get_indexer()
-        try:
-            result = indexer._detect_source_type('wallhaven_landscape')
-            self.assertEqual(result, 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('wallhaven_landscape'), 'remote')
 
     def test_wallhaven_with_query_returns_remote(self):
         """Source 'wallhaven_nature+mountains' returns 'remote'."""
-        indexer, db = self._get_indexer()
-        try:
-            result = indexer._detect_source_type('wallhaven_nature+mountains')
-            self.assertEqual(result, 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('wallhaven_nature+mountains'), 'remote')
 
     def test_wallhaven_abstract_returns_remote(self):
         """Source 'wallhaven_abstract' returns 'remote'."""
-        indexer, db = self._get_indexer()
-        try:
-            result = indexer._detect_source_type('wallhaven_abstract')
-            self.assertEqual(result, 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('wallhaven_abstract'), 'remote')
 
     def test_wallhaven_case_insensitive(self):
         """Source detection is case insensitive."""
-        indexer, db = self._get_indexer()
-        try:
-            self.assertEqual(indexer._detect_source_type('Wallhaven'), 'remote')
-            self.assertEqual(indexer._detect_source_type('WALLHAVEN_Abstract'), 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('Wallhaven'), 'remote')
+        self.assertEqual(self._detect('WALLHAVEN_Abstract'), 'remote')
 
     def test_other_remote_sources(self):
         """Other remote sources return 'remote'."""
-        indexer, db = self._get_indexer()
-        try:
-            self.assertEqual(indexer._detect_source_type('unsplash'), 'remote')
-            self.assertEqual(indexer._detect_source_type('reddit'), 'remote')
-            self.assertEqual(indexer._detect_source_type('flickr'), 'remote')
-            self.assertEqual(indexer._detect_source_type('bing'), 'remote')
-            self.assertEqual(indexer._detect_source_type('earthview'), 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('unsplash'), 'remote')
+        self.assertEqual(self._detect('reddit'), 'remote')
+        self.assertEqual(self._detect('flickr'), 'remote')
+        self.assertEqual(self._detect('bing'), 'remote')
+        self.assertEqual(self._detect('earthview'), 'remote')
 
     def test_remote_prefixes(self):
         """Remote source prefixes return 'remote'."""
-        indexer, db = self._get_indexer()
-        try:
-            self.assertEqual(indexer._detect_source_type('reddit_wallpapers'), 'remote')
-            self.assertEqual(indexer._detect_source_type('flickr_nature'), 'remote')
-            self.assertEqual(indexer._detect_source_type('unsplash_photos'), 'remote')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('reddit_wallpapers'), 'remote')
+        self.assertEqual(self._detect('flickr_nature'), 'remote')
+        self.assertEqual(self._detect('unsplash_photos'), 'remote')
 
     def test_favorites_returns_favorites(self):
         """Favorites folders return 'favorites'."""
-        indexer, db = self._get_indexer()
-        try:
-            self.assertEqual(indexer._detect_source_type('favorites'), 'favorites')
-            self.assertEqual(indexer._detect_source_type('Favorites'), 'favorites')
-            self.assertEqual(indexer._detect_source_type('faves'), 'favorites')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('favorites'), 'favorites')
+        self.assertEqual(self._detect('Favorites'), 'favorites')
+        self.assertEqual(self._detect('faves'), 'favorites')
 
     def test_local_folders_return_local(self):
         """Generic local folders return 'local'."""
-        indexer, db = self._get_indexer()
-        try:
-            self.assertEqual(indexer._detect_source_type('my_photos'), 'local')
-            self.assertEqual(indexer._detect_source_type('vacation'), 'local')
-            self.assertEqual(indexer._detect_source_type('backgrounds'), 'local')
-        finally:
-            db.close()
+        self.assertEqual(self._detect('my_photos'), 'local')
+        self.assertEqual(self._detect('vacation'), 'local')
+        self.assertEqual(self._detect('backgrounds'), 'local')
 
     def test_wallhaven_in_middle_returns_local(self):
         """Source with 'wallhaven' in middle (not prefix) returns 'local'."""
-        indexer, db = self._get_indexer()
-        try:
-            # 'backup_wallhaven' should NOT be detected as remote
-            result = indexer._detect_source_type('backup_wallhaven')
-            self.assertEqual(result, 'local')
-        finally:
-            db.close()
+        # 'backup_wallhaven' should NOT be detected as remote
+        self.assertEqual(self._detect('backup_wallhaven'), 'local')
 
 
 class TestCountImagesPerSource(unittest.TestCase):

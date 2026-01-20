@@ -3234,10 +3234,13 @@ class PreferencesVarietyDialog(PreferencesDialog):
         # Help text
         help_label = Gtk.Label(label=_(
             "Tip: Use Wallhaven search syntax for advanced queries.\n"
-            "Examples: 'nature +forest', 'id:123456', 'like:your_username'"
+            "Examples: 'nature +forest', 'id:123456', 'like:your_username'\n"
+            "The query will be validated when downloading starts."
         ))
         help_label.set_halign(Gtk.Align.START)
         help_label.get_style_context().add_class("dim-label")
+        help_label.set_line_wrap(True)
+        help_label.set_max_width_chars(50)
         content.pack_start(help_label, False, False, 5)
 
         dialog.set_default_response(Gtk.ResponseType.OK)

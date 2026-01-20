@@ -209,9 +209,9 @@
       <!-- column-name times_shown -->
       <column type="gint"/>
     </columns>
-    <signal name="row-changed" handler="delayed_apply" swapped="no"/>
-    <signal name="row-deleted" handler="delayed_apply" swapped="no"/>
-    <signal name="row-inserted" handler="delayed_apply" swapped="no"/>
+    <!-- Note: No row-changed/deleted/inserted signals here.
+         Python handlers call delayed_apply() explicitly when needed.
+         This avoids redundant saves during list population and async stats updates. -->
   </object>
   <object class="GtkTextBuffer" id="tips_buffer"/>
   <object class="PreferencesVarietyDialog" id="preferences_variety_dialog">
