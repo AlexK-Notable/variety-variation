@@ -5405,8 +5405,11 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                               <object class="GtkEntry" id="wallhaven_apikey">
                                 <property name="visible">True</property>
                                 <property name="can_focus">True</property>
+                                <property name="visibility">False</property>
+                                <property name="input_purpose">password</property>
                                 <property name="max_width_chars">40</property>
                                 <property name="placeholder_text" translatable="yes">Optional - Get from wallhaven.cc/settings/account</property>
+                                <property name="tooltip_text" translatable="yes">API key enables access to NSFW wallpapers. Get one from wallhaven.cc/settings/account</property>
                                 <signal name="changed" handler="on_wallhaven_apikey_changed" swapped="no"/>
                               </object>
                               <packing>

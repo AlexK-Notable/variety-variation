@@ -3134,46 +3134,58 @@ class PreferencesVarietyDialog(PreferencesDialog):
             )
 
     def _populate_wallhaven_list(self):
-        """Populate the Wallhaven list with sources and statistics."""
+        """Populate the Wallhaven list with sources and statistics.
+
+        Database queries run in a background thread to avoid blocking the UI.
+        """
         self.ui.wallhaven_liststore.clear()
 
-        # Get Wallhaven sources from options
+        # Get Wallhaven sources from options (fast, no DB access)
         wallhaven_sources = self.options.get_wallhaven_sources()
 
-        # Get image counts from smart selection database if available
-        image_counts = {}
-        shown_counts = {}
-        if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
-            try:
-                db = self.parent.smart_selector.db
-                # Get per-source image counts
-                image_counts = db.count_images_per_source('wallhaven_')
-                # Get times_shown aggregates per source
-                shown_counts = db.get_source_shown_counts('wallhaven_')
-            except Exception as e:
-                logger.warning(lambda: f"Failed to get Wallhaven stats: {e}")
-
-        # Populate the list
-        for source in wallhaven_sources:
-            enabled = source[0]
-            location = source[2]  # The search query
-
-            # Extract display name from location (the search term)
-            display_name = location
-
-            # Convert location to source_id format (wallhaven_<query>)
-            source_id = f"wallhaven_{location.lower().replace(' ', '_')}"
-
-            # Get counts for this source
-            img_count = image_counts.get(source_id, 0)
-            times_shown = shown_counts.get(source_id, 0)
-
-            # Add row: enabled, display_name, location, image_count, times_shown
-            self.ui.wallhaven_liststore.append([enabled, display_name, location, img_count, times_shown])
-
-        # Load API key if present
+        # Load API key if present (fast, no DB access)
         if hasattr(self.options, 'wallhaven_api_key'):
             self.ui.wallhaven_apikey.set_text(self.options.wallhaven_api_key or "")
+
+        # Initially populate list without stats (will be updated async)
+        for source in wallhaven_sources:
+            enabled = source[0]
+            location = source[2]
+            display_name = location
+            # Add row with placeholder stats (0, 0)
+            self.ui.wallhaven_liststore.append([enabled, display_name, location, 0, 0])
+
+        # Fetch stats asynchronously if smart selection is available
+        if not (hasattr(self.parent, 'smart_selector') and self.parent.smart_selector):
+            return
+
+        def fetch_stats():
+            """Background thread: fetch statistics from database."""
+            try:
+                db = self.parent.smart_selector.db
+                image_counts = db.count_images_per_source('wallhaven_')
+                shown_counts = db.get_source_shown_counts('wallhaven_')
+                return image_counts, shown_counts
+            except Exception as e:
+                logger.warning(f"Failed to get Wallhaven stats: {e}")
+                return {}, {}
+
+        def update_ui(stats):
+            """Main thread: update the liststore with fetched statistics."""
+            image_counts, shown_counts = stats
+
+            # Update each row with actual counts
+            for row in self.ui.wallhaven_liststore:
+                location = row[2]
+                source_id = f"wallhaven_{Util.convert_to_filename(location)}"
+                row[3] = image_counts.get(source_id, 0)
+                row[4] = shown_counts.get(source_id, 0)
+
+        def background_task():
+            stats = fetch_stats()
+            Util.add_mainloop_task(lambda: update_ui(stats))
+
+        threading.Thread(target=background_task, daemon=True).start()
 
     def on_wallhaven_selection_changed(self, selection=None):
         """Handle Wallhaven list selection change - enable/disable Remove button."""
@@ -3236,6 +3248,23 @@ class PreferencesVarietyDialog(PreferencesDialog):
         dialog.destroy()
 
         if response == Gtk.ResponseType.OK and search_term:
+            # Basic input validation
+            max_length = 200
+            if len(search_term) > max_length:
+                error_dialog = Gtk.MessageDialog(
+                    parent=self,
+                    modal=True,
+                    message_type=Gtk.MessageType.WARNING,
+                    buttons=Gtk.ButtonsType.OK,
+                    text=_("Search term too long"),
+                )
+                error_dialog.format_secondary_text(
+                    _("Search term must be {} characters or less.").format(max_length)
+                )
+                error_dialog.run()
+                error_dialog.destroy()
+                return
+
             # Add the new Wallhaven source
             if self.options.add_wallhaven_source(search_term, enabled=True):
                 self._populate_wallhaven_list()
