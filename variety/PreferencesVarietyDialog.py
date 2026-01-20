@@ -3200,92 +3200,37 @@ class PreferencesVarietyDialog(PreferencesDialog):
         self.options.set_wallhaven_source_enabled(location, model[path][0])
         self.delayed_apply()
 
-    def on_wallhaven_add_clicked(self, widget=None):
-        """Show dialog to add a new Wallhaven search term."""
-        dialog = Gtk.Dialog(
-            title=_("Add Wallhaven Search Term"),
-            parent=self,
-            modal=True,
-            destroy_with_parent=True,
-        )
-        dialog.add_buttons(
-            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-            Gtk.STOCK_OK, Gtk.ResponseType.OK
-        )
+    def on_wallhaven_entry_activate(self, entry):
+        """Handle Enter key in the Wallhaven search term entry field.
 
-        content = dialog.get_content_area()
-        content.set_spacing(10)
-        content.set_margin_start(15)
-        content.set_margin_end(15)
-        content.set_margin_top(10)
-        content.set_margin_bottom(10)
-
-        # Label
-        label = Gtk.Label(label=_("Enter a Wallhaven search term:"))
-        label.set_halign(Gtk.Align.START)
-        content.pack_start(label, False, False, 0)
-
-        # Entry
-        entry = Gtk.Entry()
-        entry.set_placeholder_text(_("e.g., abstract, nature, minimalist"))
-        entry.set_activates_default(True)
-        content.pack_start(entry, False, False, 0)
-
-        # Help text
-        help_label = Gtk.Label(label=_(
-            "Tip: Use Wallhaven search syntax for advanced queries.\n"
-            "Examples: 'nature +forest', 'id:123456', 'like:your_username'\n"
-            "The query will be validated when downloading starts."
-        ))
-        help_label.set_halign(Gtk.Align.START)
-        help_label.get_style_context().add_class("dim-label")
-        help_label.set_line_wrap(True)
-        help_label.set_max_width_chars(50)
-        content.pack_start(help_label, False, False, 5)
-
-        dialog.set_default_response(Gtk.ResponseType.OK)
-        dialog.show_all()
-
-        response = dialog.run()
+        Adds the term to the list and clears the entry, keeping focus
+        for quick addition of multiple terms.
+        """
         search_term = entry.get_text().strip()
-        dialog.destroy()
+        if not search_term:
+            return
 
-        if response == Gtk.ResponseType.OK and search_term:
-            # Basic input validation
-            max_length = 200
-            if len(search_term) > max_length:
-                error_dialog = Gtk.MessageDialog(
-                    parent=self,
-                    modal=True,
-                    message_type=Gtk.MessageType.WARNING,
-                    buttons=Gtk.ButtonsType.OK,
-                    text=_("Search term too long"),
-                )
-                error_dialog.format_secondary_text(
-                    _("Search term must be {} characters or less.").format(max_length)
-                )
-                error_dialog.run()
-                error_dialog.destroy()
-                return
+        # Basic input validation
+        max_length = 200
+        if len(search_term) > max_length:
+            self.parent.show_notification(
+                _("Search term too long (max {} chars)").format(max_length)
+            )
+            return
 
-            # Add the new Wallhaven source
-            if self.options.add_wallhaven_source(search_term, enabled=True):
-                self._populate_wallhaven_list()
-                self.delayed_apply()
-            else:
-                # Source already exists
-                error_dialog = Gtk.MessageDialog(
-                    parent=self,
-                    modal=True,
-                    message_type=Gtk.MessageType.INFO,
-                    buttons=Gtk.ButtonsType.OK,
-                    text=_("Search term already exists"),
-                )
-                error_dialog.format_secondary_text(
-                    _("The search term '{}' is already in your list.").format(search_term)
-                )
-                error_dialog.run()
-                error_dialog.destroy()
+        # Add the new Wallhaven source
+        if self.options.add_wallhaven_source(search_term, enabled=True):
+            self._populate_wallhaven_list()
+            self.delayed_apply()
+            # Clear entry for next term (focus stays automatically)
+            entry.set_text("")
+        else:
+            # Source already exists - brief notification, don't block
+            self.parent.show_notification(
+                _("'{}' already exists").format(search_term)
+            )
+            # Select all text so user can easily replace it
+            entry.select_region(0, -1)
 
     def on_wallhaven_remove_clicked(self, widget=None):
         """Remove the selected Wallhaven search term."""

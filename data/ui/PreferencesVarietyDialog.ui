@@ -5247,7 +5247,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                             <property name="visible">True</property>
                             <property name="can_focus">False</property>
                             <property name="halign">start</property>
-                            <property name="label" translatable="yes">Manage your Wallhaven search terms. Each term is treated as a separate source for wallpaper selection diversity.</property>
+                            <property name="label" translatable="yes">Each search term is treated as a separate source for wallpaper selection diversity.</property>
                             <property name="wrap">True</property>
                             <property name="xalign">0</property>
                           </object>
@@ -5255,6 +5255,24 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                             <property name="expand">False</property>
                             <property name="fill">True</property>
                             <property name="position">1</property>
+                          </packing>
+                        </child>
+                        <!-- Inline Entry for adding search terms -->
+                        <child>
+                          <object class="GtkEntry" id="wallhaven_add_entry">
+                            <property name="visible">True</property>
+                            <property name="can_focus">True</property>
+                            <property name="margin_top">5</property>
+                            <property name="margin_bottom">5</property>
+                            <property name="placeholder_text" translatable="yes">Type search term and press Enter (e.g., abstract, nature +forest, id:123456)</property>
+                            <property name="secondary_icon_name">list-add-symbolic</property>
+                            <property name="secondary_icon_tooltip_text" translatable="yes">Press Enter to add</property>
+                            <signal name="activate" handler="on_wallhaven_entry_activate" swapped="no"/>
+                          </object>
+                          <packing>
+                            <property name="expand">False</property>
+                            <property name="fill">True</property>
+                            <property name="position">2</property>
                           </packing>
                         </child>
                         <!-- TreeView in ScrolledWindow -->
@@ -5326,7 +5344,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                           <packing>
                             <property name="expand">True</property>
                             <property name="fill">True</property>
-                            <property name="position">2</property>
+                            <property name="position">3</property>
                           </packing>
                         </child>
                         <!-- Button Box -->
@@ -5336,21 +5354,8 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                             <property name="can_focus">False</property>
                             <property name="spacing">10</property>
                             <child>
-                              <object class="GtkButton" id="wallhaven_add_button">
-                                <property name="label" translatable="yes">Add Search Term...</property>
-                                <property name="visible">True</property>
-                                <property name="can_focus">True</property>
-                                <signal name="clicked" handler="on_wallhaven_add_clicked" swapped="no"/>
-                              </object>
-                              <packing>
-                                <property name="expand">False</property>
-                                <property name="fill">True</property>
-                                <property name="position">0</property>
-                              </packing>
-                            </child>
-                            <child>
                               <object class="GtkButton" id="wallhaven_remove_button">
-                                <property name="label" translatable="yes">Remove</property>
+                                <property name="label" translatable="yes">Remove Selected</property>
                                 <property name="visible">True</property>
                                 <property name="can_focus">True</property>
                                 <property name="sensitive">False</property>
@@ -5359,7 +5364,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">1</property>
+                                <property name="position">0</property>
                               </packing>
                             </child>
                             <child>
@@ -5372,14 +5377,14 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                               <packing>
                                 <property name="expand">False</property>
                                 <property name="fill">True</property>
-                                <property name="position">2</property>
+                                <property name="position">1</property>
                               </packing>
                             </child>
                           </object>
                           <packing>
                             <property name="expand">False</property>
                             <property name="fill">True</property>
-                            <property name="position">3</property>
+                            <property name="position">4</property>
                           </packing>
                         </child>
                         <!-- API Key Section -->
@@ -5422,7 +5427,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                           <packing>
                             <property name="expand">False</property>
                             <property name="fill">True</property>
-                            <property name="position">4</property>
+                            <property name="position">5</property>
                           </packing>
                         </child>
                       </object>
