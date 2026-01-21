@@ -5670,7 +5670,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                             <property name="spacing">10</property>
                             <child>
                               <object class="GtkButton" id="wallhaven_remove_button">
-                                <property name="label" translatable="yes">Remove Selected</property>
+                                <property name="label" translatable="yes">Remove Entry</property>
                                 <property name="visible">True</property>
                                 <property name="can_focus">True</property>
                                 <property name="sensitive">False</property>
@@ -5835,7 +5835,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                             </child>
                             <child>
                               <object class="GtkButton" id="wallhaven_exclusions_remove_button">
-                                <property name="label" translatable="yes">Remove Selected</property>
+                                <property name="label" translatable="yes">Remove Entry</property>
                                 <property name="visible">True</property>
                                 <property name="can_focus">True</property>
                                 <property name="receives_default">True</property>
