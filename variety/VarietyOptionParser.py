@@ -131,6 +131,17 @@ To set a specific wallpaper: %prog --set /some/local/image.jpg
     )
 
     parser.add_option(
+        "--smart-next",
+        action="store_true",
+        dest="smart_next",
+        help=_(
+            "Show Next wallpaper using Smart Selection directly, bypassing the prepared buffer. "
+            "This strictly respects cooldown settings. Use for keybinds when you want "
+            "weighted random selection without the pre-cached buffer."
+        ),
+    )
+
+    parser.add_option(
         "-t",
         "--trash",
         action="store_true",
@@ -271,8 +282,8 @@ To set a specific wallpaper: %prog --set /some/local/image.jpg
     options, args = parser.parse_args(arguments)
 
     if report_errors:
-        if (options.next or options.fast_forward) and options.previous:
-            parser.error(_("options --next/--fast-forward and --previous are mutually exclusive"))
+        if (options.next or options.fast_forward or options.smart_next) and options.previous:
+            parser.error(_("options --next/--fast-forward/--smart-next and --previous are mutually exclusive"))
 
         if options.trash and options.favorite:
             parser.error(_("options --trash and --favorite are mutually exclusive"))

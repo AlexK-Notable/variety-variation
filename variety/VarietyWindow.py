@@ -2151,11 +2151,16 @@ class VarietyWindow(Gtk.Window):
                 # This ensures wallust has run and its cache is available
                 if refresh_level == VarietyWindow.RefreshLevel.ALL:
                     if hasattr(self, 'smart_selector') and self.smart_selector:
-                        try:
-                            palette = self._read_wallust_cache_for_image(filename)
-                            self.smart_selector.record_shown(filename, wallust_palette=palette)
-                        except Exception as e:
-                            logger.debug(lambda: f"Smart Selection record_shown failed: {e}")
+                        # Skip if smart_next_wallpaper already recorded (prevents double-count)
+                        if getattr(self, '_smart_record_done', False):
+                            self._smart_record_done = False
+                            logger.debug("Smart Selection: skipping record_shown (already done)")
+                        else:
+                            try:
+                                palette = self._read_wallust_cache_for_image(filename)
+                                self.smart_selector.record_shown(filename, wallust_palette=palette)
+                            except Exception as e:
+                                logger.debug(lambda: f"Smart Selection record_shown failed: {e}")
 
                     # Apply theme AFTER record_shown stores the palette in database
                     if hasattr(self, 'theme_engine') and self.theme_engine:
@@ -2306,6 +2311,56 @@ class VarietyWindow(Gtk.Window):
             self.set_wp_throttled(self.used[self.position])
         else:
             self.change_wallpaper(keep_quote=True)
+
+    def smart_next_wallpaper(self, widget=None):
+        """Select next wallpaper using Smart Selection directly.
+
+        This bypasses the prepared buffer entirely, going straight to the
+        smart selector for weighted random selection that strictly respects
+        cooldown settings. Use this for keybinds when you want proper
+        recency-based selection without the prepared buffer's random shuffling.
+        """
+        if not hasattr(self, 'smart_selector') or not self.smart_selector:
+            logger.warning("Smart Selection not initialized, falling back to next_wallpaper")
+            self.next_wallpaper(widget)
+            return
+
+        try:
+            # Get a single image from smart selector with proper weighting
+            selected = self.smart_selector.select_images(1)
+
+            if not selected:
+                logger.warning("Smart Selection returned no images, falling back to next_wallpaper")
+                self.next_wallpaper(widget)
+                return
+
+            img = selected[0]
+
+            # Verify file exists and is readable
+            if not os.access(img, os.R_OK):
+                logger.warning(f"Selected image not accessible: {img}, falling back")
+                self.next_wallpaper(widget)
+                return
+
+            # Record shown IMMEDIATELY to update cooldown before any other selection
+            # This prevents race conditions with rapid successive calls
+            self.smart_selector.record_shown(img)
+            logger.info(f"Smart Selection: selected and recorded {img}")
+
+            # Mark that we've already recorded, so do_set_wp doesn't double-count
+            self._smart_record_done = True
+
+            # Now set the wallpaper
+            self.auto_changed = widget is None
+            self.set_wallpaper(img, auto_changed=self.auto_changed)
+
+            # Handle quotes if enabled
+            if self.quotes_engine and self.options.quotes_enabled:
+                self.quote = self.quotes_engine.next_quote()
+
+        except Exception as e:
+            logger.exception(f"Smart Selection failed: {e}, falling back to next_wallpaper")
+            self.next_wallpaper(widget)
 
     def move_to_history_position(self, position):
         if 0 <= position < len(self.used):
@@ -2483,6 +2538,39 @@ class VarietyWindow(Gtk.Window):
                             img = album["images"][index + 1]
                             break
 
+            # Primary path: use smart selection when available
+            if not img and hasattr(self, 'smart_selector') and self.smart_selector:
+                try:
+                    # Preserve unseen downloads preference: with configured probability,
+                    # prioritize a recently downloaded image over smart selection
+                    if random.random() < self.options.download_preference_ratio:
+                        enabled_unseen_downloads = self._enabled_unseen_downloads()
+                        if enabled_unseen_downloads:
+                            unseen = random.choice(list(enabled_unseen_downloads))
+                            if unseen != self.current and os.access(unseen, os.R_OK):
+                                img = unseen
+                                logger.info(lambda: f"Using unseen download: {img}")
+
+                    # Use smart selector for weighted selection respecting cooldowns
+                    if not img:
+                        selected = self.smart_selector.select_images(3)
+                        selected = [
+                            f for f in selected
+                            if f != self.current or self.is_current_refreshable()
+                        ]
+                        if selected:
+                            img = selected[0]
+                            # Record shown IMMEDIATELY to prevent race conditions
+                            # with rapid successive calls or prepare thread
+                            self.smart_selector.record_shown(img)
+                            self._smart_record_done = True
+                            logger.info(lambda: f"Smart Selection: selected {img}")
+
+                except Exception as e:
+                    logger.warning(lambda: f"Smart selection failed: {e}, falling back to prepared buffer")
+                    img = None
+
+            # Fallback: use prepared buffer (when smart selector unavailable or failed)
             if not img:
                 with self.prepared_lock:
                     # with some big probability, use one of the unseen_downloads
@@ -2502,8 +2590,9 @@ class VarietyWindow(Gtk.Window):
                             self.prepare_event.set()
                             break
 
+            # Last resort: direct random selection
             if not img:
-                logger.info(lambda: "No images yet in prepared buffer, using some random image")
+                logger.info(lambda: "No images in prepared buffer, using random selection")
                 self.prepare_event.set()
                 rnd_images = self.select_random_images(3)
                 rnd_images = [
@@ -3304,6 +3393,8 @@ class VarietyWindow(Gtk.Window):
                     self.set_wallpaper(options.set_wallpaper)
                 elif options.fast_forward:
                     self.next_wallpaper(bypass_history=True)
+                elif options.smart_next:
+                    self.smart_next_wallpaper()
                 elif options.next:
                     self.next_wallpaper()
                 elif options.previous:
