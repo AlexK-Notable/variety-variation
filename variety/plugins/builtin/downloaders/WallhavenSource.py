@@ -78,8 +78,8 @@ class WallhavenSource(ConfigurableImageSource):
             return query, _('Got "Unauthorized" response. Invalid API key?')
 
     def create_downloader(self, config):
-        # Append global exclusions to the search query if any are configured
-        exclusions = getattr(self.variety.options, 'wallhaven_exclusions', '').strip()
+        # Append enabled global exclusions to the search query
+        exclusions = self.variety.options.get_enabled_wallhaven_exclusions_string()
         if exclusions and not config.startswith(("http://", "https://")):
             # Only append exclusions for keyword searches, not URL-based searches
             config = f"{config} {exclusions}"

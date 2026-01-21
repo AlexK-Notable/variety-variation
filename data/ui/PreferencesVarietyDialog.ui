@@ -197,18 +197,24 @@
   </object>
   <object class="GtkListStore" id="wallhaven_liststore">
     <columns>
-      
+
       <column type="gboolean" />
-      
+
       <column type="gchararray" />
-      
+
       <column type="gchararray" />
-      
+
       <column type="gint" />
-      
+
       <column type="gint" />
     </columns>
-    
+
+  </object>
+  <object class="GtkListStore" id="wallhaven_exclusions_liststore">
+    <columns>
+      <column type="gboolean" />
+      <column type="gchararray" />
+    </columns>
   </object>
   <object class="GtkTextBuffer" id="tips_buffer" />
   <object class="PreferencesVarietyDialog" id="preferences_variety_dialog">
@@ -5744,13 +5750,15 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                           <object class="GtkBox" id="wallhaven_exclusions_box">
                             <property name="visible">True</property>
                             <property name="can_focus">False</property>
+                            <property name="orientation">vertical</property>
                             <property name="margin_top">10</property>
                             <property name="spacing">5</property>
                             <child>
                               <object class="GtkLabel" id="wallhaven_exclusions_label">
                                 <property name="visible">True</property>
                                 <property name="can_focus">False</property>
-                                <property name="label" translatable="yes">Global exclusions:</property>
+                                <property name="halign">start</property>
+                                <property name="label" translatable="yes">Global exclusions (applied to all keyword searches):</property>
                               </object>
                               <packing>
                                 <property name="expand">False</property>
@@ -5759,17 +5767,86 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                               </packing>
                             </child>
                             <child>
-                              <object class="GtkEntry" id="wallhaven_exclusions">
+                              <object class="GtkEntry" id="wallhaven_exclusions_entry">
                                 <property name="visible">True</property>
                                 <property name="can_focus">True</property>
-                                <property name="placeholder_text" translatable="yes">e.g., -anime -people -animals (applied to all searches)</property>
-                                <property name="tooltip_text" translatable="yes">Tags to exclude from ALL Wallhaven searches. Use -tag syntax, space-separated.</property>
-                                <signal name="changed" handler="on_wallhaven_exclusions_changed" swapped="no" />
+                                <property name="placeholder_text" translatable="yes">Type exclusion term and press Enter (e.g., anime, people, animals)</property>
+                                <property name="secondary_icon_name">list-add-symbolic</property>
+                                <property name="tooltip_text" translatable="yes">Add a tag to exclude from ALL Wallhaven keyword searches. The '-' prefix is added automatically.</property>
+                                <signal name="activate" handler="on_wallhaven_exclusions_entry_activate" swapped="no" />
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">1</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkScrolledWindow" id="wallhaven_exclusions_scrolled">
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <property name="min_content_height">100</property>
+                                <property name="max_content_height">150</property>
+                                <property name="hscrollbar_policy">never</property>
+                                <property name="vscrollbar_policy">automatic</property>
+                                <property name="shadow_type">etched-in</property>
+                                <child>
+                                  <object class="GtkTreeView" id="wallhaven_exclusions_tree">
+                                    <property name="visible">True</property>
+                                    <property name="can_focus">True</property>
+                                    <property name="model">wallhaven_exclusions_liststore</property>
+                                    <child internal-child="selection">
+                                      <object class="GtkTreeSelection" id="wallhaven_exclusions_selection">
+                                        <property name="mode">single</property>
+                                        <signal name="changed" handler="on_wallhaven_exclusions_selection_changed" swapped="no" />
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkTreeViewColumn" id="wallhaven_exclusions_enabled_col">
+                                        <property name="title" translatable="yes">On</property>
+                                        <child>
+                                          <object class="GtkCellRendererToggle" id="wallhaven_exclusions_enabled_renderer" />
+                                          <attributes>
+                                            <attribute name="active">0</attribute>
+                                          </attributes>
+                                        </child>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkTreeViewColumn" id="wallhaven_exclusions_term_col">
+                                        <property name="title" translatable="yes">Exclusion Term</property>
+                                        <property name="expand">True</property>
+                                        <child>
+                                          <object class="GtkCellRendererText" id="wallhaven_exclusions_term_renderer" />
+                                          <attributes>
+                                            <attribute name="text">1</attribute>
+                                          </attributes>
+                                        </child>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
                               </object>
                               <packing>
                                 <property name="expand">True</property>
                                 <property name="fill">True</property>
-                                <property name="position">1</property>
+                                <property name="position">2</property>
+                              </packing>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="wallhaven_exclusions_remove_button">
+                                <property name="label" translatable="yes">Remove Selected</property>
+                                <property name="visible">True</property>
+                                <property name="can_focus">True</property>
+                                <property name="receives_default">True</property>
+                                <property name="halign">start</property>
+                                <property name="sensitive">False</property>
+                                <signal name="clicked" handler="on_wallhaven_exclusions_remove_clicked" swapped="no" />
+                              </object>
+                              <packing>
+                                <property name="expand">False</property>
+                                <property name="fill">True</property>
+                                <property name="position">3</property>
                               </packing>
                             </child>
                           </object>

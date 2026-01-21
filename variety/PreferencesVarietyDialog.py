@@ -3133,10 +3133,14 @@ class PreferencesVarietyDialog(PreferencesDialog):
     # =========================================================================
 
     def _setup_wallhaven_tab(self):
-        """Set up Wallhaven tab toggle handler - called once from reload()."""
+        """Set up Wallhaven tab toggle handlers - called once from reload()."""
         if not hasattr(self, "_wallhaven_toggle_handler_id"):
             self._wallhaven_toggle_handler_id = self.ui.wallhaven_enabled_renderer.connect(
                 "toggled", self._on_wallhaven_enabled_toggled, self.ui.wallhaven_liststore
+            )
+        if not hasattr(self, "_wallhaven_exclusions_toggle_handler_id"):
+            self._wallhaven_exclusions_toggle_handler_id = self.ui.wallhaven_exclusions_enabled_renderer.connect(
+                "toggled", self._on_wallhaven_exclusion_enabled_toggled, self.ui.wallhaven_exclusions_liststore
             )
 
     def _populate_wallhaven_list(self):
@@ -3153,9 +3157,10 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if hasattr(self.options, 'wallhaven_api_key'):
             self.ui.wallhaven_apikey.set_text(self.options.wallhaven_api_key or "")
 
-        # Load global exclusions if present
-        if hasattr(self.options, 'wallhaven_exclusions'):
-            self.ui.wallhaven_exclusions.set_text(self.options.wallhaven_exclusions or "")
+        # Load global exclusions into the exclusions table
+        self.ui.wallhaven_exclusions_liststore.clear()
+        for excl in self.options.get_wallhaven_exclusions():
+            self.ui.wallhaven_exclusions_liststore.append([excl[0], excl[1]])
 
         # Initially populate list without stats (will be updated async)
         for source in wallhaven_sources:
@@ -3305,9 +3310,65 @@ class PreferencesVarietyDialog(PreferencesDialog):
         self.options.wallhaven_api_key = self.ui.wallhaven_apikey.get_text().strip()
         self.delayed_apply()
 
-    def on_wallhaven_exclusions_changed(self, widget=None):
-        """Handle Wallhaven global exclusions change."""
-        if self.loading:
-            return
-        self.options.wallhaven_exclusions = self.ui.wallhaven_exclusions.get_text().strip()
+    def on_wallhaven_exclusions_selection_changed(self, selection=None):
+        """Handle exclusions list selection change - enable/disable Remove button."""
+        model, tree_iter = self.ui.wallhaven_exclusions_selection.get_selected()
+        has_selection = tree_iter is not None
+        self.ui.wallhaven_exclusions_remove_button.set_sensitive(has_selection)
+
+    def _on_wallhaven_exclusion_enabled_toggled(self, widget, path, model):
+        """Handle toggle of exclusion enabled state."""
+        model[path][0] = not model[path][0]
+        term = model[path][1]
+        enabled = model[path][0]
+        self.options.set_wallhaven_exclusion_enabled(term, enabled)
         self.delayed_apply()
+
+    def on_wallhaven_exclusions_entry_activate(self, entry):
+        """Add new exclusion when Enter is pressed in the entry field."""
+        term = entry.get_text().strip()
+        if not term:
+            return
+
+        # Normalize term (remove leading '-' if present)
+        if term.startswith("-"):
+            term = term[1:].strip()
+        if not term:
+            return
+
+        if len(term) > 100:
+            self.parent.show_notification(_("Exclusion term too long (max 100 characters)"))
+            return
+
+        if self.options.add_wallhaven_exclusion(term, enabled=True):
+            # Add to liststore
+            self.ui.wallhaven_exclusions_liststore.append([True, term])
+            self.delayed_apply()
+            # Clear entry for next term
+            entry.set_text("")
+        else:
+            # Term already exists
+            self.parent.show_notification(_("'{}' already exists").format(term))
+            entry.select_region(0, -1)
+
+    def on_wallhaven_exclusions_remove_clicked(self, widget=None):
+        """Remove the selected exclusion."""
+        model, tree_iter = self.ui.wallhaven_exclusions_selection.get_selected()
+        if tree_iter:
+            term = model[tree_iter][1]
+
+            dialog = Gtk.MessageDialog(
+                transient_for=self,
+                modal=True,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text=_("Remove exclusion?"),
+            )
+            dialog.format_secondary_text(_("Remove '{}' from global exclusions?").format(term))
+            response = dialog.run()
+            dialog.destroy()
+
+            if response == Gtk.ResponseType.YES:
+                self.options.remove_wallhaven_exclusion(term)
+                model.remove(tree_iter)
+                self.delayed_apply()

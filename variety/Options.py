@@ -149,7 +149,30 @@ class Options:
                 pass
 
             try:
-                self.wallhaven_exclusions = str(config["wallhaven_exclusions"]).strip()
+                exclusions_text = config.get("wallhaven_exclusions", "")
+                if isinstance(exclusions_text, str) and exclusions_text.strip():
+                    # Parse format: "enabled|term;enabled|term;..." or legacy "-term -term"
+                    if "|" in exclusions_text:
+                        # New format: "True|anime;False|people;True|animals"
+                        self.wallhaven_exclusions = []
+                        for item in exclusions_text.split(";"):
+                            if "|" in item:
+                                parts = item.split("|", 1)
+                                enabled = parts[0].strip().lower() == "true"
+                                term = parts[1].strip()
+                                if term:
+                                    self.wallhaven_exclusions.append([enabled, term])
+                    else:
+                        # Legacy format: "-anime -people -animals" -> migrate to new format
+                        self.wallhaven_exclusions = []
+                        for term in exclusions_text.split():
+                            term = term.strip()
+                            if term:
+                                # Remove leading "-" for storage, all legacy are enabled
+                                if term.startswith("-"):
+                                    term = term[1:]
+                                if term:
+                                    self.wallhaven_exclusions.append([True, term])
             except Exception:
                 pass
 
@@ -853,6 +876,77 @@ class Options:
         self.sources.append([enabled, Options.SourceType.WALLHAVEN, location])
         return True
 
+    def get_wallhaven_exclusions(self):
+        """Get all Wallhaven global exclusions.
+
+        Returns:
+            List of [enabled, term] entries.
+        """
+        return self.wallhaven_exclusions
+
+    def add_wallhaven_exclusion(self, term, enabled=True):
+        """Add a new Wallhaven global exclusion.
+
+        Args:
+            term: The exclusion term (without leading '-').
+            enabled: Whether the exclusion should be enabled (default True).
+
+        Returns:
+            True if exclusion was added, False if it already exists.
+        """
+        # Normalize term (remove leading '-' if present)
+        term = term.strip()
+        if term.startswith("-"):
+            term = term[1:].strip()
+        if not term:
+            return False
+        # Check if already exists
+        for excl in self.wallhaven_exclusions:
+            if excl[1].lower() == term.lower():
+                return False
+        self.wallhaven_exclusions.append([enabled, term])
+        return True
+
+    def remove_wallhaven_exclusion(self, term):
+        """Remove a Wallhaven global exclusion by its term.
+
+        Args:
+            term: The exclusion term to remove.
+
+        Returns:
+            True if exclusion was found and removed, False otherwise.
+        """
+        for i, excl in enumerate(self.wallhaven_exclusions):
+            if excl[1] == term:
+                del self.wallhaven_exclusions[i]
+                return True
+        return False
+
+    def set_wallhaven_exclusion_enabled(self, term, enabled):
+        """Set the enabled state of a Wallhaven global exclusion.
+
+        Args:
+            term: The exclusion term.
+            enabled: The new enabled state.
+
+        Returns:
+            True if exclusion was found and updated, False otherwise.
+        """
+        for excl in self.wallhaven_exclusions:
+            if excl[1] == term:
+                excl[0] = enabled
+                return True
+        return False
+
+    def get_enabled_wallhaven_exclusions_string(self):
+        """Get enabled exclusions as a space-separated string with '-' prefix.
+
+        Returns:
+            String like "-anime -people -animals" for use in search queries.
+        """
+        enabled_terms = [excl[1] for excl in self.wallhaven_exclusions if excl[0]]
+        return " ".join(f"-{term}" for term in enabled_terms)
+
     def set_defaults(self):
         self.change_enabled = True
         self.change_on_start = False
@@ -868,7 +962,7 @@ class Options:
         self.quota_enabled = True
         self.quota_size = 1000
         self.wallhaven_api_key = ""
-        self.wallhaven_exclusions = ""  # Global exclusions for all Wallhaven searches
+        self.wallhaven_exclusions = []  # List of [enabled, term] for global Wallhaven exclusions
 
         self.favorites_folder = os.path.join(get_profile_path(), "Favorites")
         self.favorites_operations = [
@@ -1022,7 +1116,10 @@ class Options:
             config["quota_size"] = str(self.quota_size)
 
             config["wallhaven_api_key"] = str(self.wallhaven_api_key)
-            config["wallhaven_exclusions"] = str(self.wallhaven_exclusions)
+            # Serialize exclusions as "enabled|term;enabled|term;..."
+            config["wallhaven_exclusions"] = ";".join(
+                f"{excl[0]}|{excl[1]}" for excl in self.wallhaven_exclusions
+            )
 
             config["favorites_folder"] = Util.collapseuser(self.favorites_folder)
             config["favorites_operations"] = ";".join(
