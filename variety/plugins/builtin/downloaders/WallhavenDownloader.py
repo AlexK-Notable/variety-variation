@@ -118,26 +118,79 @@ class WallhavenDownloader(DefaultDownloader):
         logger.info(lambda: "Image src URL: " + src_url)
 
         extra_metadata = {}
+
+        # Fetch detailed wallpaper info from API
+        wallpaper_info = None
         try:
             wallpaper_info = Util.fetch_json(
                 WALLPAPER_INFO_URL % urllib.parse.quote(queue_item["id"])
             )
-            extra_metadata["keywords"] = [tag["name"] for tag in wallpaper_info["data"]["tags"]]
-        except:
-            pass
+            data = wallpaper_info["data"]
 
+            # Extract tag names for XMP keywords (backwards compatible)
+            extra_metadata["keywords"] = [tag["name"] for tag in data.get("tags", [])]
+
+            # Parse created_at to Unix timestamp
+            uploaded_at = None
+            created_at = data.get("created_at")
+            if created_at:
+                try:
+                    from datetime import datetime
+                    # Wallhaven format: "2023-01-15 12:34:56"
+                    dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                    uploaded_at = int(dt.timestamp())
+                except (ValueError, TypeError):
+                    pass
+
+            # Store rich metadata in extraData for JSON serialization
+            # This gets properly serialized to XMP and can be read back
+            uploader = data.get("uploader", {})
+            extra_metadata["extraData"] = {
+                "wallhaven": {
+                    # Full tag data (id, name, alias, category, purity)
+                    "tags": [
+                        {
+                            "tag_id": tag["id"],
+                            "name": tag["name"],
+                            "alias": tag.get("alias"),
+                            "category": tag.get("category"),
+                            "purity": tag.get("purity"),
+                        }
+                        for tag in data.get("tags", [])
+                    ],
+                    # Source-provided color palette
+                    "colors": data.get("colors", []),
+                    # Content classification
+                    "category": data.get("category"),  # general/anime/people
+                    "purity": data.get("purity"),  # sfw/sketchy/nsfw
+                    # Attribution
+                    "uploader": uploader.get("username"),
+                    "source": data.get("source"),  # Original source URL
+                    # Popularity metrics
+                    "views": data.get("views"),
+                    "favorites": data.get("favorites"),
+                    # Timestamp
+                    "uploaded_at": uploaded_at,
+                }
+            }
+
+        except Exception as e:
+            logger.warning(lambda: f"Failed to fetch Wallhaven metadata: {e}")
+
+        # Handle purity/SFW rating
         try:
-            purity = queue_item["purity"]
-            sfw_rating = {"sfw": 100, "sketchy": 50, "nsfw": 0}[purity]
-            extra_metadata["sfwRating"] = sfw_rating
+            purity = queue_item.get("purity") or (wallpaper_info["data"]["purity"] if wallpaper_info else None)
+            if purity:
+                sfw_rating = {"sfw": 100, "sketchy": 50, "nsfw": 0}.get(purity, 50)
+                extra_metadata["sfwRating"] = sfw_rating
 
-            if self.is_safe_mode_enabled() and sfw_rating < 100:
-                logger.info(
-                    lambda: "Skipping non-safe download from Wallhaven. "
-                    "Is the source %s suitable for Safe mode?" % self.config
-                )
-                return None
-        except:
+                if self.is_safe_mode_enabled() and sfw_rating < 100:
+                    logger.info(
+                        lambda: "Skipping non-safe download from Wallhaven. "
+                        "Is the source %s suitable for Safe mode?" % self.config
+                    )
+                    return None
+        except Exception:
             pass
 
         return self.save_locally(wallpaper_url, src_url, extra_metadata=extra_metadata)

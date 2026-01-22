@@ -200,9 +200,14 @@ class ImageIndexer:
                 # Flush batch when full
                 if len(batch) >= batch_size:
                     self.db.batch_upsert_images(batch)
+                    indexed_paths = [r.filepath for r in batch]
+                    # Extract source metadata (Wallhaven tags, colors, etc.)
+                    try:
+                        self.extract_source_metadata(indexed_paths)
+                    except Exception as e:
+                        logger.warning(f"Metadata extraction failed: {e}")
                     # Trigger eager palette extraction
                     if self.on_images_indexed:
-                        indexed_paths = [r.filepath for r in batch]
                         try:
                             self.on_images_indexed(indexed_paths)
                         except Exception as e:
@@ -212,9 +217,14 @@ class ImageIndexer:
         # Flush remaining batch
         if batch:
             self.db.batch_upsert_images(batch)
+            indexed_paths = [r.filepath for r in batch]
+            # Extract source metadata for final batch
+            try:
+                self.extract_source_metadata(indexed_paths)
+            except Exception as e:
+                logger.warning(f"Metadata extraction failed: {e}")
             # Trigger eager palette extraction for final batch
             if self.on_images_indexed:
-                indexed_paths = [r.filepath for r in batch]
                 try:
                     self.on_images_indexed(indexed_paths)
                 except Exception as e:
@@ -278,6 +288,65 @@ class ImageIndexer:
             'images_with_palettes': len(images_with_palettes),
             'favorites_count': sum(1 for img in all_images if img.is_favorite),
         }
+
+    def extract_source_metadata(self, filepaths: List[str]) -> int:
+        """Extract and store source metadata (Wallhaven, etc.) for images.
+
+        Reads metadata from image XMP/JSON sidecar files and stores
+        rich metadata (tags, colors, category, etc.) in the database.
+
+        Args:
+            filepaths: List of image filepaths to process.
+
+        Returns:
+            Number of images with metadata successfully extracted.
+        """
+        from variety.Util import Util
+
+        extracted_count = 0
+
+        for filepath in filepaths:
+            try:
+                # Read metadata from image or sidecar file
+                metadata = Util.read_metadata(filepath)
+                if not metadata:
+                    continue
+
+                # Check for extraData.wallhaven
+                extra_data = metadata.get('extraData', {})
+                wallhaven_data = extra_data.get('wallhaven') if isinstance(extra_data, dict) else None
+
+                if wallhaven_data:
+                    # Store image metadata
+                    self.db.upsert_image_metadata(
+                        filepath=filepath,
+                        category=wallhaven_data.get('category'),
+                        purity=wallhaven_data.get('purity'),
+                        sfw_rating=metadata.get('sfwRating'),
+                        source_colors=wallhaven_data.get('colors'),
+                        uploader=wallhaven_data.get('uploader'),
+                        source_url=wallhaven_data.get('source'),
+                        views=wallhaven_data.get('views'),
+                        favorites=wallhaven_data.get('favorites'),
+                        uploaded_at=wallhaven_data.get('uploaded_at'),
+                    )
+
+                    # Store tags
+                    tags = wallhaven_data.get('tags', [])
+                    if tags:
+                        # Upsert all tags
+                        self.db.upsert_tags_batch(tags)
+                        # Link image to tags
+                        tag_ids = [t['tag_id'] for t in tags]
+                        self.db.link_image_tags(filepath, tag_ids)
+
+                    extracted_count += 1
+                    logger.debug(f"Extracted Wallhaven metadata for {filepath}")
+
+            except Exception as e:
+                logger.warning(f"Failed to extract metadata for {filepath}: {e}")
+
+        return extracted_count
 
     def index_directory_incremental(
         self,
@@ -358,10 +427,16 @@ class ImageIndexer:
             if records:
                 self.db.batch_upsert_images(records)
                 result.added += len(records)
+                indexed_paths = [r.filepath for r in records]
+
+                # Extract source metadata (Wallhaven tags, colors, etc.)
+                try:
+                    self.extract_source_metadata(indexed_paths)
+                except Exception as e:
+                    logger.warning(f"Metadata extraction failed: {e}")
 
                 # Trigger eager palette extraction for newly indexed images
                 if self.on_images_indexed:
-                    indexed_paths = [r.filepath for r in records]
                     try:
                         self.on_images_indexed(indexed_paths)
                     except Exception as e:
@@ -397,10 +472,16 @@ class ImageIndexer:
             if records:
                 self.db.batch_upsert_images(records)
                 result.updated += len(records)
+                updated_paths = [r.filepath for r in records]
+
+                # Extract source metadata (Wallhaven tags, colors, etc.)
+                try:
+                    self.extract_source_metadata(updated_paths)
+                except Exception as e:
+                    logger.warning(f"Metadata extraction failed: {e}")
 
                 # Trigger eager palette extraction for modified images
                 if self.on_images_indexed:
-                    updated_paths = [r.filepath for r in records]
                     try:
                         self.on_images_indexed(updated_paths)
                     except Exception as e:

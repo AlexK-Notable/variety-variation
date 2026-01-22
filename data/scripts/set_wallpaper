@@ -245,7 +245,7 @@ elif [ "$DE" == "sway" ]; then
         PID=$(pidof swaybg)
         swaybg -i "$WP" -m fill &
         if [ -n "$PID" ]; then
-            sleep 1
+            sleep 0.3
             read -r -a PID <<< "$PID"
             for each_pid in "${PID[@]}"; do
                 kill "$each_pid" 2>/dev/null

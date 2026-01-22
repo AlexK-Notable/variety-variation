@@ -132,6 +132,52 @@ def new_image_boost(times_shown: int, boost_value: float) -> float:
     return boost_value if times_shown == 0 else 1.0
 
 
+def source_balance_factor(
+    source_times_shown: int,
+    avg_source_times_shown: float,
+    boost_value: float,
+) -> float:
+    """Calculate source balance boost for underutilized sources.
+
+    Boosts images from sources that have been shown less than average,
+    helping maintain variety across all image sources.
+
+    The boost scales linearly: sources at 0 shown get full boost,
+    sources at average get 1.0 (neutral), sources above average get
+    slight penalty (down to 0.5x at 2x average).
+
+    Args:
+        source_times_shown: How many times images from this source have been shown.
+        avg_source_times_shown: Average times_shown across all active sources.
+        boost_value: The maximum boost multiplier for completely unused sources.
+
+    Returns:
+        Multiplier between 0.5 and boost_value:
+        - boost_value for sources with 0 shown (most underutilized)
+        - 1.0 for sources at average
+        - 0.5 for sources at 2x average or more (slight penalty)
+    """
+    # No data or disabled - neutral
+    if avg_source_times_shown <= 0 or boost_value <= 1.0:
+        return 1.0
+
+    # Calculate ratio: 0 = never used, 1 = at average, 2 = twice average
+    if source_times_shown <= 0:
+        ratio = 0.0
+    else:
+        ratio = source_times_shown / avg_source_times_shown
+
+    if ratio <= 1.0:
+        # Below or at average: boost linearly from boost_value to 1.0
+        # ratio 0 -> boost_value, ratio 1 -> 1.0
+        return boost_value - (ratio * (boost_value - 1.0))
+    else:
+        # Above average: slight penalty, linear from 1.0 to 0.5
+        # ratio 1 -> 1.0, ratio 2+ -> 0.5
+        penalty_ratio = min(ratio - 1.0, 1.0)  # Cap at ratio 2.0
+        return 1.0 - (penalty_ratio * 0.5)
+
+
 def calculate_time_affinity(
     image_palette: Optional[PaletteRecord],
     target_lightness: float,
@@ -287,11 +333,14 @@ def calculate_weight(
     time_target_lightness: Optional[float] = None,
     time_target_temperature: Optional[float] = None,
     time_target_saturation: Optional[float] = None,
+    source_times_shown: Optional[int] = None,
+    avg_source_times_shown: Optional[float] = None,
 ) -> float:
     """Calculate combined selection weight for an image.
 
     Weight formula:
-        weight = recency * source_recency * favorite_boost * new_boost * color_affinity * time_affinity
+        weight = recency * source_recency * favorite_boost * new_boost
+                 * source_balance * color_affinity * time_affinity
 
     All factors are multiplicative, so a low score in any area
     significantly reduces the overall weight.
@@ -307,6 +356,10 @@ def calculate_weight(
             If None, time affinity is not applied.
         time_target_temperature: Target temperature for time-based selection (-1.0 to +1.0).
         time_target_saturation: Target saturation for time-based selection (0.0-1.0).
+        source_times_shown: Total times images from this source have been shown.
+            Used for source balance calculation to prefer underutilized sources.
+        avg_source_times_shown: Average times_shown across all active sources.
+            Used with source_times_shown for source balance calculation.
 
     Returns:
         Combined weight (higher = more likely to be selected).
@@ -332,6 +385,15 @@ def calculate_weight(
     new_boost = new_image_boost(image.times_shown, config.new_image_boost)
     color_affinity = color_affinity_factor(image_palette, target_palette, config, constraints)
 
+    # Calculate source balance if statistics provided (boosts underutilized sources)
+    src_balance = 1.0
+    if source_times_shown is not None and avg_source_times_shown is not None:
+        src_balance = source_balance_factor(
+            source_times_shown,
+            avg_source_times_shown,
+            config.new_image_boost,  # Reuse new_image_boost value for source balance
+        )
+
     # Calculate time affinity if time adaptation is enabled and targets are provided
     time_affinity = 1.0
     if (config.time_adaptation_enabled and
@@ -348,5 +410,5 @@ def calculate_weight(
         )
 
     # Combine multiplicatively with minimum floor to prevent zero collapse
-    weight = recency * source * fav_boost * new_boost * color_affinity * time_affinity
+    weight = recency * source * fav_boost * new_boost * src_balance * color_affinity * time_affinity
     return max(weight, 1e-6)

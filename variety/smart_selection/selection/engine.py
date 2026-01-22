@@ -159,11 +159,20 @@ class SelectionEngine:
         """
         time_target = self._get_time_target("selection")
 
+        # Calculate average times_shown across all sources for source balance
+        avg_source_times_shown = 0.0
+        if sources:
+            total_times = sum(src.times_shown for src in sources.values())
+            avg_source_times_shown = total_times / len(sources) if sources else 0.0
+
         weights = []
         for img in candidates:
             source_last_shown = None
+            source_times_shown = None
             if img.source_id and img.source_id in sources:
-                source_last_shown = sources[img.source_id].last_shown_at
+                source_record = sources[img.source_id]
+                source_last_shown = source_record.last_shown_at
+                source_times_shown = source_record.times_shown
 
             # Get image palette for color affinity calculation
             image_palette = palettes.get(img.filepath) if palettes else None
@@ -176,6 +185,8 @@ class SelectionEngine:
                 time_target_lightness=time_target.lightness if time_target else None,
                 time_target_temperature=time_target.temperature if time_target else None,
                 time_target_saturation=time_target.saturation if time_target else None,
+                source_times_shown=source_times_shown,
+                avg_source_times_shown=avg_source_times_shown,
             )
             weights.append(weight)
 
@@ -285,12 +296,21 @@ class SelectionEngine:
 
         time_target = self._get_time_target("scoring")
 
+        # Calculate average times_shown across all sources for source balance
+        avg_source_times_shown = 0.0
+        if sources:
+            total_times = sum(src.times_shown for src in sources.values())
+            avg_source_times_shown = total_times / len(sources) if sources else 0.0
+
         # Calculate weights and create ScoredCandidate objects
         scored = []
         for img in candidates:
             source_last_shown = None
+            source_times_shown = None
             if img.source_id and img.source_id in sources:
-                source_last_shown = sources[img.source_id].last_shown_at
+                source_record = sources[img.source_id]
+                source_last_shown = source_record.last_shown_at
+                source_times_shown = source_record.times_shown
 
             image_palette = palettes.get(img.filepath) if palettes else None
 
@@ -302,6 +322,8 @@ class SelectionEngine:
                 time_target_lightness=time_target.lightness if time_target else None,
                 time_target_temperature=time_target.temperature if time_target else None,
                 time_target_saturation=time_target.saturation if time_target else None,
+                source_times_shown=source_times_shown,
+                avg_source_times_shown=avg_source_times_shown,
             )
             scored.append(ScoredCandidate(image=img, weight=weight))
 

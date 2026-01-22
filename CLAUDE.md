@@ -202,36 +202,42 @@ Key config sections:
 - Quote settings
 - Download folder paths
 
-## Active Development: Smart Selection Engine
+## Smart Selection Engine
 
-A new intelligent wallpaper selection system is being developed. See zettelkasten note:
-- **"Variety Smart Selection Engine - Implementation Plan"** (ID: 20251203T210011280589000)
+The Smart Selection Engine provides intelligent wallpaper selection. See technical documentation:
+- `docs/smart_selection_technical_documentation.md`
 
-### Key Features (Planned)
+### Features (All Complete)
 - **Image recency penalty**: Don't repeat wallpapers for N days
 - **Source rotation**: Balance selection across wallpaper sources
 - **Favorites boost**: Higher probability for favorited images
-- **Wallust integration**: Index color palettes for each image
-- **Color-aware selection**: Choose wallpapers by palette similarity, temperature, lightness
+- **Wallust integration**: Color palette extraction and storage
+- **Color-aware selection**: Palette similarity, temperature, lightness filtering
+- **Time adaptation**: Darker palettes at night, brighter during day
+- **Metadata tracking**: Rich source metadata (tags, category, purity) and user action analytics
 
 ### Module Location
 ```
 variety/smart_selection/
   __init__.py, models.py, database.py, config.py,
-  indexer.py, palette.py, weights.py, selector.py
+  indexer.py, palette.py, weights.py, selector.py,
+  theming.py, time_adapter.py
 ```
 
-### Implementation Phases
-1. ✅ **Foundation**: Database + basic indexing (Favorites) - COMPLETE
-2. ✅ **Weighted Selection**: Recency-based selection replacing random - COMPLETE
-3. **Wallust Integration**: Color palette extraction and storage
-4. **Color-Aware Selection**: Palette similarity, filtering by color characteristics
-5. **Full Collection + UI**: Index all wallpapers, preferences UI
+### Database Schema (v6)
+- `images` - Core image metadata and usage tracking
+- `sources` - Wallpaper source rotation tracking
+- `palettes` - Wallust color palettes and HSL metrics
+- `image_metadata` - Source-specific data (category, purity, uploader, views)
+- `tags` / `image_tags` - Many-to-many tag associations
+- `user_actions` - Favorite/trash event tracking for analytics
 
-### Phase 2 Integration Points (VarietyWindow.py)
+### Integration Points (VarietyWindow.py)
 - `_init_smart_selector()` - Initializes SmartSelector on startup
 - `select_random_images()` - Uses weighted selection with fallback
 - `set_wallpaper()` - Records shown images for recency tracking
+- `move_to_trash()` - Records trash action for analytics
+- `report_image_favorited()` - Records favorite action for analytics
 - `on_quit()` - Cleans up SmartSelector resources
 
 ## Existing Zettelkasten Notes

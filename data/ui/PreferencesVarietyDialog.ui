@@ -3885,7 +3885,7 @@ To show the icon in the launcher choose About or Preferences. You may wish to lo
                                 <property name="visible">True</property>
                                 <property name="can_focus">False</property>
                                 <property name="halign">start</property>
-                                <property name="label" translatable="yes">Priority boost for recently added images that haven't been shown yet. Ensures new wallpapers appear sooner.</property>
+                                <property name="label" translatable="yes">Priority boost for images that haven't been shown yet. Also balances selection across sources - preferring sources used less often.</property>
                                 <property name="wrap">True</property>
                                 <property name="max_width_chars">45</property>
                                 <property name="xalign">0</property>

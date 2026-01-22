@@ -68,10 +68,19 @@ class UnsplashDownloader(SimpleDownloader):
     def get_default_throttling(self):
         return Throttling(max_downloads_per_hour=10, max_queue_fills_per_hour=1)
 
+    def _get_api_key(self):
+        """Get the API key to use (user-configured or built-in fallback)."""
+        options = self.get_variety().options
+        user_api_key = getattr(options, 'unsplash_api_key', None)
+        if user_api_key and user_api_key.strip():
+            return user_api_key.strip()
+        return Util.unxor(UnsplashDownloader.HASH, UnsplashDownloader.API_KEY)
+
     def get_unsplash_api_url(self):
+        options = self.get_variety().options
         return "https://api.unsplash.com/photos/random?count=30&client_id={}{}".format(
-            Util.unxor(UnsplashDownloader.HASH, UnsplashDownloader.API_KEY),
-            "&orientation=landscape" if self.get_variety().options.use_landscape_enabled else "",
+            self._get_api_key(),
+            "&orientation=landscape" if options.use_landscape_enabled else "",
         )
 
     def fill_queue(self):
@@ -137,9 +146,7 @@ class UnsplashDownloader(SimpleDownloader):
         download_loc = extraData.get("unsplashDownloadLocation")
         reported = extraData.get("unsplashDownloadReported")
         if download_loc and not reported:
-            url = "{}?client_id={}".format(
-                download_loc, Util.unxor(UnsplashDownloader.HASH, UnsplashDownloader.API_KEY)
-            )
+            url = "{}?client_id={}".format(download_loc, self._get_api_key())
             Util.fetch(url)
             meta["extraData"]["unsplashDownloadReported"] = True
             Util.write_metadata(img, meta)

@@ -34,7 +34,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -196,6 +196,7 @@ class ImageDatabase:
             3: self._migrate_v2_to_v3,
             4: self._migrate_v3_to_v4,
             5: self._migrate_v4_to_v5,
+            6: self._migrate_v5_to_v6,
         }
 
         with self._lock:
@@ -296,6 +297,81 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info("Migration v4→v5: Soft-delete support enabled")
+
+    def _migrate_v5_to_v6(self):
+        """Migrate schema from v5 to v6.
+
+        Adds metadata tracking tables for rich source metadata (Wallhaven, etc.):
+        - image_metadata: category, purity, colors, uploader, popularity
+        - tags: normalized tag definitions
+        - image_tags: many-to-many image-tag relationships
+        - user_actions: track favorite/trash for analytics
+        """
+        cursor = self.conn.cursor()
+
+        # image_metadata table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS image_metadata (
+                filepath TEXT PRIMARY KEY,
+                category TEXT,
+                purity TEXT,
+                sfw_rating INTEGER,
+                source_colors TEXT,
+                uploader TEXT,
+                source_url TEXT,
+                views INTEGER,
+                favorites INTEGER,
+                uploaded_at INTEGER,
+                metadata_fetched_at INTEGER,
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+            )
+        ''')
+        logger.info("Migration v5→v6: Created image_metadata table")
+
+        # tags table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tags (
+                tag_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                alias TEXT,
+                category TEXT,
+                purity TEXT,
+                UNIQUE(name)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)')
+        logger.info("Migration v5→v6: Created tags table")
+
+        # image_tags join table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS image_tags (
+                filepath TEXT NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (filepath, tag_id),
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_filepath ON image_tags(filepath)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag_id ON image_tags(tag_id)')
+        logger.info("Migration v5→v6: Created image_tags table")
+
+        # user_actions table for tracking favorites/trash
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filepath TEXT NOT NULL,
+                action TEXT NOT NULL,
+                action_at INTEGER NOT NULL,
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_actions_filepath ON user_actions(filepath)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_actions_action ON user_actions(action)')
+        logger.info("Migration v5→v6: Created user_actions table")
+
+        self.conn.commit()
+        logger.info("Migration v5→v6: Metadata tracking tables created")
 
     def close(self):
         """Close the database connection.
@@ -1181,6 +1257,348 @@ class ImageDatabase:
                 'extracted': row['extracted'] or 0,
                 'failed': row['failed'] or 0,
             }
+
+    # =========================================================================
+    # Image Metadata Operations
+    # =========================================================================
+
+    def upsert_image_metadata(
+        self,
+        filepath: str,
+        category: Optional[str] = None,
+        purity: Optional[str] = None,
+        sfw_rating: Optional[int] = None,
+        source_colors: Optional[List[str]] = None,
+        uploader: Optional[str] = None,
+        source_url: Optional[str] = None,
+        views: Optional[int] = None,
+        favorites: Optional[int] = None,
+        uploaded_at: Optional[int] = None,
+    ):
+        """Insert or update metadata for an image.
+
+        Args:
+            filepath: Path to the image (must exist in images table).
+            category: Content category (e.g., 'general', 'anime', 'people').
+            purity: Content purity (e.g., 'sfw', 'sketchy', 'nsfw').
+            sfw_rating: Numeric SFW rating 0-100.
+            source_colors: List of hex color strings from source API.
+            uploader: Username of uploader.
+            source_url: Original source attribution URL.
+            views: View count from source.
+            favorites: Favorite count from source.
+            uploaded_at: Upload timestamp from source.
+        """
+        import json
+        colors_json = json.dumps(source_colors) if source_colors else None
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO image_metadata (
+                    filepath, category, purity, sfw_rating, source_colors,
+                    uploader, source_url, views, favorites, uploaded_at,
+                    metadata_fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(filepath) DO UPDATE SET
+                    category = COALESCE(excluded.category, category),
+                    purity = COALESCE(excluded.purity, purity),
+                    sfw_rating = COALESCE(excluded.sfw_rating, sfw_rating),
+                    source_colors = COALESCE(excluded.source_colors, source_colors),
+                    uploader = COALESCE(excluded.uploader, uploader),
+                    source_url = COALESCE(excluded.source_url, source_url),
+                    views = COALESCE(excluded.views, views),
+                    favorites = COALESCE(excluded.favorites, favorites),
+                    uploaded_at = COALESCE(excluded.uploaded_at, uploaded_at),
+                    metadata_fetched_at = excluded.metadata_fetched_at
+            ''', (
+                filepath, category, purity, sfw_rating, colors_json,
+                uploader, source_url, views, favorites, uploaded_at,
+                int(time.time())
+            ))
+            self.conn.commit()
+
+    def get_image_metadata(self, filepath: str) -> Optional[Dict]:
+        """Get metadata for an image.
+
+        Args:
+            filepath: Path to the image.
+
+        Returns:
+            Dictionary with metadata fields, or None if not found.
+        """
+        import json
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT * FROM image_metadata WHERE filepath = ?',
+                (filepath,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            if result.get('source_colors'):
+                result['source_colors'] = json.loads(result['source_colors'])
+            return result
+
+    # =========================================================================
+    # Tag Operations
+    # =========================================================================
+
+    def upsert_tag(
+        self,
+        tag_id: int,
+        name: str,
+        alias: Optional[str] = None,
+        category: Optional[str] = None,
+        purity: Optional[str] = None,
+    ) -> int:
+        """Insert or update a tag.
+
+        Args:
+            tag_id: Unique tag ID (from source API, or auto-generated).
+            name: Tag name.
+            alias: Alternative name for the tag.
+            category: Tag category.
+            purity: Tag purity rating.
+
+        Returns:
+            The tag_id.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO tags (tag_id, name, alias, category, purity)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tag_id) DO UPDATE SET
+                    name = excluded.name,
+                    alias = COALESCE(excluded.alias, alias),
+                    category = COALESCE(excluded.category, category),
+                    purity = COALESCE(excluded.purity, purity)
+            ''', (tag_id, name, alias, category, purity))
+            self.conn.commit()
+            return tag_id
+
+    def upsert_tags_batch(self, tags: List[Dict]) -> List[int]:
+        """Insert or update multiple tags.
+
+        Args:
+            tags: List of dicts with keys: tag_id, name, alias, category, purity.
+
+        Returns:
+            List of tag_ids.
+        """
+        if not tags:
+            return []
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.executemany('''
+                INSERT INTO tags (tag_id, name, alias, category, purity)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tag_id) DO UPDATE SET
+                    name = excluded.name,
+                    alias = COALESCE(excluded.alias, alias),
+                    category = COALESCE(excluded.category, category),
+                    purity = COALESCE(excluded.purity, purity)
+            ''', [
+                (t['tag_id'], t['name'], t.get('alias'), t.get('category'), t.get('purity'))
+                for t in tags
+            ])
+            self.conn.commit()
+            return [t['tag_id'] for t in tags]
+
+    def get_tag_by_name(self, name: str) -> Optional[Dict]:
+        """Get a tag by name.
+
+        Args:
+            name: Tag name to look up.
+
+        Returns:
+            Dictionary with tag fields, or None if not found.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM tags WHERE name = ?', (name,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def link_image_tags(self, filepath: str, tag_ids: List[int]):
+        """Link an image to multiple tags.
+
+        Replaces all existing tag links for the image.
+
+        Args:
+            filepath: Path to the image.
+            tag_ids: List of tag IDs to link.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            # Remove existing links
+            cursor.execute('DELETE FROM image_tags WHERE filepath = ?', (filepath,))
+            # Add new links
+            if tag_ids:
+                cursor.executemany(
+                    'INSERT OR IGNORE INTO image_tags (filepath, tag_id) VALUES (?, ?)',
+                    [(filepath, tag_id) for tag_id in tag_ids]
+                )
+            self.conn.commit()
+
+    def get_tags_for_image(self, filepath: str) -> List[Dict]:
+        """Get all tags for an image.
+
+        Args:
+            filepath: Path to the image.
+
+        Returns:
+            List of tag dictionaries.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT t.* FROM tags t
+                JOIN image_tags it ON t.tag_id = it.tag_id
+                WHERE it.filepath = ?
+            ''', (filepath,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_images_by_tag(self, tag_name: str, limit: int = 100) -> List[str]:
+        """Get image filepaths that have a specific tag.
+
+        Args:
+            tag_name: Name of the tag to search for.
+            limit: Maximum number of results.
+
+        Returns:
+            List of filepaths.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT it.filepath FROM image_tags it
+                JOIN tags t ON it.tag_id = t.tag_id
+                WHERE t.name = ?
+                LIMIT ?
+            ''', (tag_name, limit))
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_tag_statistics(
+        self,
+        action_filter: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict]:
+        """Get tag usage statistics.
+
+        Args:
+            action_filter: If set, only count images with this action ('favorite', 'trash').
+            limit: Maximum number of tags to return.
+
+        Returns:
+            List of dicts with 'name', 'count' keys, sorted by count descending.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            if action_filter:
+                cursor.execute('''
+                    SELECT t.name, COUNT(DISTINCT it.filepath) as count
+                    FROM tags t
+                    JOIN image_tags it ON t.tag_id = it.tag_id
+                    JOIN user_actions ua ON it.filepath = ua.filepath
+                    WHERE ua.action = ?
+                    GROUP BY t.tag_id
+                    ORDER BY count DESC
+                    LIMIT ?
+                ''', (action_filter, limit))
+            else:
+                cursor.execute('''
+                    SELECT t.name, COUNT(DISTINCT it.filepath) as count
+                    FROM tags t
+                    JOIN image_tags it ON t.tag_id = it.tag_id
+                    GROUP BY t.tag_id
+                    ORDER BY count DESC
+                    LIMIT ?
+                ''', (limit,))
+            return [{'name': row[0], 'count': row[1]} for row in cursor.fetchall()]
+
+    def get_favorite_tag_statistics(self, limit: int = 50) -> List[Dict]:
+        """Get tags most associated with favorited images.
+
+        Args:
+            limit: Maximum number of tags to return.
+
+        Returns:
+            List of dicts with 'name', 'count' keys.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT t.name, COUNT(DISTINCT it.filepath) as count
+                FROM tags t
+                JOIN image_tags it ON t.tag_id = it.tag_id
+                JOIN images i ON it.filepath = i.filepath
+                WHERE i.is_favorite = 1
+                GROUP BY t.tag_id
+                ORDER BY count DESC
+                LIMIT ?
+            ''', (limit,))
+            return [{'name': row[0], 'count': row[1]} for row in cursor.fetchall()]
+
+    # =========================================================================
+    # User Action Tracking
+    # =========================================================================
+
+    def record_user_action(self, filepath: str, action: str):
+        """Record a user action on an image.
+
+        Args:
+            filepath: Path to the image.
+            action: Action type ('favorite', 'unfavorite', 'trash', 'skip').
+        """
+        valid_actions = ('favorite', 'unfavorite', 'trash', 'skip')
+        if action not in valid_actions:
+            raise ValueError(f"Invalid action: {action}. Must be one of {valid_actions}")
+
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO user_actions (filepath, action, action_at)
+                VALUES (?, ?, ?)
+            ''', (filepath, action, int(time.time())))
+            self.conn.commit()
+
+    def get_user_actions(self, filepath: str) -> List[Dict]:
+        """Get all recorded actions for an image.
+
+        Args:
+            filepath: Path to the image.
+
+        Returns:
+            List of action records with 'action' and 'action_at' keys.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT action, action_at FROM user_actions
+                WHERE filepath = ?
+                ORDER BY action_at DESC
+            ''', (filepath,))
+            return [{'action': row[0], 'action_at': row[1]} for row in cursor.fetchall()]
+
+    def get_action_counts(self) -> Dict[str, int]:
+        """Get counts of each action type.
+
+        Returns:
+            Dictionary mapping action names to counts.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT action, COUNT(*) as count
+                FROM user_actions
+                GROUP BY action
+            ''')
+            return {row[0]: row[1] for row in cursor.fetchall()}
 
     # =========================================================================
     # Statistics Queries

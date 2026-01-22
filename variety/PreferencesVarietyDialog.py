@@ -1169,6 +1169,12 @@ class PreferencesVarietyDialog(PreferencesDialog):
             for s in self.unsupported_sources:
                 self.options.sources.append(s)
 
+            # Read Wallhaven settings from UI
+            self.options.wallhaven_api_key = self.ui.wallhaven_apikey.get_text().strip()
+            self.options.wallhaven_exclusions = []
+            for row in self.ui.wallhaven_exclusions_liststore:
+                self.options.wallhaven_exclusions.append([row[0], row[1]])
+
             self.options.wallpaper_auto_rotate = self.ui.wallpaper_auto_rotate.get_active()
             self.options.wallpaper_display_mode = self.ui.wallpaper_display_mode.get_active_id()
 

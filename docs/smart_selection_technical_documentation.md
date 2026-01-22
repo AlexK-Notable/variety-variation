@@ -1,10 +1,18 @@
 # Smart Selection Engine - Technical Documentation
 
-**Version:** 2.0
-**Last Updated:** 2026-01-19
+**Version:** 2.1
+**Last Updated:** 2026-01-21
 **Author:** Variety Development Team
 
-> **Recent Updates (v2.0):**
+> **Recent Updates (v2.1):**
+> - Schema version 6: Added metadata tracking tables for analytics
+> - `image_metadata`: Stores source-specific data (category, purity, uploader, views, favorites)
+> - `tags` / `image_tags`: Many-to-many tag associations from Wallhaven API
+> - `user_actions`: Tracks favorite/trash events for correlation analysis
+> - WallhavenDownloader now captures full API metadata on download
+> - ImageIndexer extracts metadata from XMP during indexing
+>
+> **Previous Updates (v2.0):**
 > - Schema version 4: Compound index for color filtering, idempotent migrations
 > - A-ES weighted reservoir sampling: O(n + k·log k) selection algorithm
 > - XDG Desktop Portal API: Theme detection for KDE, XFCE, and other non-GNOME desktops
@@ -1082,12 +1090,14 @@ Constraints for filtering images during selection.
 
 ### Schema Version
 
-Current version: **4**
+Current version: **6**
 
 **Migration History:**
 - v1 → v2: Added `cursor` column to palettes table for theming engine
 - v2 → v3: Added `palette_status` column to images table for eager extraction
 - v3 → v4: Added compound index for efficient color filtering queries
+- v4 → v5: No schema changes (internal refactoring)
+- v5 → v6: Added metadata tracking tables (`image_metadata`, `tags`, `image_tags`, `user_actions`)
 
 All migrations are idempotent (safe to run multiple times).
 
@@ -1181,12 +1191,98 @@ CREATE INDEX idx_palettes_color_filter ON palettes(avg_lightness, color_temperat
 
 **Row Count Estimate:** 0 - 50,000 (grows as images are shown)
 
+#### image_metadata (v6+)
+
+Stores rich source-specific metadata (e.g., Wallhaven category, purity, uploader).
+
+```sql
+CREATE TABLE image_metadata (
+    filepath TEXT PRIMARY KEY,           -- Foreign key to images.filepath
+    category TEXT,                       -- Content category (e.g., 'anime', 'general', 'people')
+    purity TEXT,                         -- Content purity ('sfw', 'sketchy', 'nsfw')
+    sfw_rating INTEGER,                  -- Numeric SFW score (0-100)
+    source_colors TEXT,                  -- JSON array of source-provided colors
+    uploader TEXT,                       -- Username who uploaded to source
+    source_url TEXT,                     -- Original source URL
+    views INTEGER,                       -- View count at source
+    favorites INTEGER,                   -- Favorite count at source
+    uploaded_at INTEGER,                 -- Upload timestamp at source
+    metadata_fetched_at INTEGER,         -- When metadata was retrieved
+    FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+);
+```
+
+**Row Count Estimate:** 0 - 50,000 (populated for Wallhaven images)
+
+#### tags (v6+)
+
+Stores unique tags from image sources.
+
+```sql
+CREATE TABLE tags (
+    tag_id INTEGER PRIMARY KEY,          -- Source-provided tag ID
+    name TEXT NOT NULL UNIQUE,           -- Tag name (e.g., 'landscape', 'anime')
+    alias TEXT,                          -- Alternative name
+    category TEXT,                       -- Tag category (e.g., 'Nature', 'Anime')
+    purity TEXT                          -- Tag purity level
+);
+```
+
+**Row Count Estimate:** 100 - 10,000
+
+#### image_tags (v6+)
+
+Many-to-many relationship between images and tags.
+
+```sql
+CREATE TABLE image_tags (
+    filepath TEXT NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (filepath, tag_id),
+    FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE
+);
+```
+
+**Indexes:**
+```sql
+CREATE INDEX idx_image_tags_tag ON image_tags(tag_id);
+```
+
+**Row Count Estimate:** 0 - 500,000 (average 10 tags per image)
+
+#### user_actions (v6+)
+
+Tracks user interactions (favorite, trash) for analytics.
+
+```sql
+CREATE TABLE user_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filepath TEXT NOT NULL,
+    action TEXT NOT NULL,                -- 'favorite', 'trash', 'skip', 'copy', 'move_to_favorites'
+    timestamp INTEGER NOT NULL,
+    FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+);
+```
+
+**Indexes:**
+```sql
+CREATE INDEX idx_user_actions_filepath ON user_actions(filepath);
+CREATE INDEX idx_user_actions_action ON user_actions(action);
+```
+
+**Row Count Estimate:** 0 - 100,000 (grows with user activity)
+
 ### Relationships
 
 ```mermaid
 erDiagram
     images ||--o{ palettes : has
     images }o--|| sources : belongs_to
+    images ||--o| image_metadata : has
+    images ||--o{ image_tags : has
+    image_tags }o--|| tags : references
+    images ||--o{ user_actions : has
 
     images {
         TEXT filepath PK
@@ -1207,12 +1303,40 @@ erDiagram
     }
 
     palettes {
-        TEXT filepath PK,FK
+        TEXT filepath PK_FK
         TEXT color0_to_15
         REAL avg_hue
         REAL avg_saturation
         REAL avg_lightness
         REAL color_temperature
+    }
+
+    image_metadata {
+        TEXT filepath PK_FK
+        TEXT category
+        TEXT purity
+        INTEGER sfw_rating
+        INTEGER views
+        INTEGER favorites
+    }
+
+    tags {
+        INTEGER tag_id PK
+        TEXT name
+        TEXT alias
+        TEXT category
+    }
+
+    image_tags {
+        TEXT filepath PK_FK
+        INTEGER tag_id PK_FK
+    }
+
+    user_actions {
+        INTEGER id PK
+        TEXT filepath FK
+        TEXT action
+        INTEGER timestamp
     }
 ```
 
@@ -1249,7 +1373,11 @@ erDiagram
 | images table | ~500 bytes | ~5 MB | ~25 MB |
 | sources table | ~200 bytes | ~1 KB | ~10 KB |
 | palettes table | ~800 bytes | ~8 MB | ~40 MB |
-| **Total** | | **~13 MB** | **~65 MB** |
+| image_metadata table | ~300 bytes | ~3 MB | ~15 MB |
+| tags table | ~100 bytes | ~100 KB | ~1 MB |
+| image_tags table | ~50 bytes | ~5 MB | ~25 MB |
+| user_actions table | ~100 bytes | ~1 MB | ~10 MB |
+| **Total** | | **~22 MB** | **~116 MB** |
 
 ### Backup and Migration
 

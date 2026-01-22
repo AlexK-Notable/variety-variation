@@ -2951,6 +2951,13 @@ class VarietyWindow(Gtk.Window):
                     _("You don't have permissions to delete %s to Trash.") % file,
                 )
             else:
+                # Record trash action for analytics
+                if hasattr(self, 'smart_selector') and self.smart_selector:
+                    try:
+                        self.smart_selector.db.record_user_action(file, 'trash')
+                    except Exception as e:
+                        logger.debug(f"Failed to record trash action: {e}")
+
                 if self.current == file:
                     self.next_wallpaper(widget)
 
@@ -3045,6 +3052,13 @@ class VarietyWindow(Gtk.Window):
             logger.exception(lambda: "Exception in move_to_favorites")
 
     def report_image_favorited(self, img):
+        # Record favorite action for analytics
+        if hasattr(self, 'smart_selector') and self.smart_selector:
+            try:
+                self.smart_selector.db.record_user_action(img, 'favorite')
+            except Exception as e:
+                logger.debug(f"Failed to record favorite action: {e}")
+
         meta = Util.read_metadata(img)
         if meta and "sourceType" in meta:
             for image_source in Options.IMAGE_SOURCES:
