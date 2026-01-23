@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+
+{% block title %}{{ image.filename }} - Variety Database Browser{% endblock %}
+
+{% block content %}
+<div class="h-full overflow-y-auto">
+    <div class="max-w-7xl mx-auto p-6">
+
+        <!-- Back Navigation -->
+        <div class="mb-4">
+            <a href="/browse"
+               class="inline-flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-primary transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                </svg>
+                Back to Browse
+            </a>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Main Image Column -->
+            <div class="lg:col-span-2">
+                <!-- Image Container -->
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
+                    {% if file_exists %}
+                    <a href="/preview/{{ encoded_path }}" target="_blank" class="block">
+                        <img src="/preview/{{ encoded_path }}"
+                             alt="{{ image.filename }}"
+                             class="w-full h-auto max-h-[70vh] object-contain bg-gray-900">
+                    </a>
+                    {% else %}
+                    <div class="w-full h-64 flex items-center justify-center bg-gray-200 dark:bg-gray-700">
+                        <div class="text-center text-gray-500 dark:text-gray-400">
+                            <svg class="w-16 h-16 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                            </svg>
+                            <p>File not found on disk</p>
+                            <p class="text-sm mt-1">{{ image.filepath }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Filename -->
+                <div class="mt-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h1 class="text-lg font-medium text-gray-900 dark:text-white break-all">
+                        {{ image.filename }}
+                    </h1>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1 break-all">
+                        {{ image.filepath }}
+                    </p>
+                </div>
+
+                <!-- Tags -->
+                {% if tags %}
+                <div class="mt-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Tags</h2>
+                    <div class="flex flex-wrap gap-2">
+                        {% for tag in tags %}
+                        <a href="/browse?tag={{ tag.name | urlencode }}"
+                           class="px-3 py-1 text-sm rounded-full bg-gray-100 dark:bg-gray-700
+                                  text-gray-700 dark:text-gray-300 hover:bg-primary hover:text-white
+                                  transition-colors">
+                            {{ tag.name }}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Color Palette -->
+                {% if palette and palette.colors %}
+                <div class="mt-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Color Palette</h2>
+
+                    <!-- Color Swatches -->
+                    <div class="grid grid-cols-8 gap-1 mb-4">
+                        {% for color in palette.colors %}
+                        <div class="group relative">
+                            <div class="aspect-square rounded cursor-pointer border border-gray-200 dark:border-gray-600"
+                                 style="background-color: {{ color }};"
+                                 title="{{ color }}"
+                                 onclick="navigator.clipboard.writeText('{{ color }}'); showToast('Copied {{ color }}', 'success');">
+                            </div>
+                            <span class="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs text-gray-500
+                                         opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                {{ color }}
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <!-- Background/Foreground -->
+                    {% if palette.background or palette.foreground %}
+                    <div class="flex gap-4 mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+                        {% if palette.background %}
+                        <div class="flex items-center gap-2">
+                            <div class="w-6 h-6 rounded border border-gray-200 dark:border-gray-600"
+                                 style="background-color: {{ palette.background }};"></div>
+                            <span class="text-sm text-gray-600 dark:text-gray-400">BG: {{ palette.background }}</span>
+                        </div>
+                        {% endif %}
+                        {% if palette.foreground %}
+                        <div class="flex items-center gap-2">
+                            <div class="w-6 h-6 rounded border border-gray-200 dark:border-gray-600"
+                                 style="background-color: {{ palette.foreground }};"></div>
+                            <span class="text-sm text-gray-600 dark:text-gray-400">FG: {{ palette.foreground }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- HSL Metrics -->
+                    {% if palette.avg_hue is not none %}
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <div>
+                            <span class="text-xs text-gray-500 dark:text-gray-400">Avg Hue</span>
+                            <p class="text-sm font-medium text-gray-900 dark:text-white">{{ "%.0f"|format(palette.avg_hue) }}°</p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-gray-500 dark:text-gray-400">Saturation</span>
+                            <p class="text-sm font-medium text-gray-900 dark:text-white">{{ "%.0f"|format(palette.avg_saturation * 100) }}%</p>
+                        </div>
+                        <div>
+                            <span class="text-xs text-gray-500 dark:text-gray-400">Lightness</span>
+                            <p class="text-sm font-medium text-gray-900 dark:text-white">{{ "%.0f"|format(palette.avg_lightness * 100) }}%</p>
+                        </div>
+                        {% if palette.color_temperature %}
+                        <div>
+                            <span class="text-xs text-gray-500 dark:text-gray-400">Temperature</span>
+                            <p class="text-sm font-medium text-gray-900 dark:text-white capitalize">{{ palette.color_temperature }}</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Sidebar - Metadata -->
+            <div class="lg:col-span-1 space-y-4">
+
+                <!-- Quick Actions -->
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Actions</h2>
+                    <div class="space-y-2">
+                        <!-- Favorite Button -->
+                        <button id="favorite-btn"
+                                class="w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors
+                                       {% if image.is_favorite %}
+                                       bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800
+                                       {% else %}
+                                       bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600
+                                       {% endif %}"
+                                hx-post="/api/images/{{ encoded_path }}/favorite"
+                                hx-swap="none"
+                                hx-on::after-request="
+                                    const resp = JSON.parse(event.detail.xhr.responseText);
+                                    const btn = this;
+                                    const svg = btn.querySelector('svg');
+                                    const text = btn.lastChild;
+                                    if (resp.is_favorite) {
+                                        btn.className = 'w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800';
+                                        svg.setAttribute('fill', 'currentColor');
+                                        text.textContent = 'Unfavorite';
+                                    } else {
+                                        btn.className = 'w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600';
+                                        svg.setAttribute('fill', 'none');
+                                        text.textContent = 'Favorite';
+                                    }
+                                ">
+                            <svg class="w-5 h-5" fill="{% if image.is_favorite %}currentColor{% else %}none{% endif %}"
+                                 stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+                            </svg>
+                            {% if image.is_favorite %}Unfavorite{% else %}Favorite{% endif %}
+                        </button>
+
+                        <!-- Open Source URL -->
+                        {% if image.source_url %}
+                        <a href="{{ image.source_url }}"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           class="w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2
+                                  bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300
+                                  hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                            </svg>
+                            Open Source
+                        </a>
+                        {% endif %}
+
+                        <!-- Trash Button -->
+                        <button class="w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2
+                                       bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400
+                                       hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900 dark:hover:text-red-300
+                                       transition-colors"
+                                hx-post="/api/images/{{ encoded_path }}/trash"
+                                hx-swap="none"
+                                hx-confirm="Mark this image as trashed?"
+                                hx-on::after-request="showToast('Image marked as trashed', 'success')">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>
+                            Mark as Trash
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Image Info -->
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Image Info</h2>
+                    <dl class="space-y-3">
+                        {% if image.dimensions %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Dimensions</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ image.dimensions }}</dd>
+                        </div>
+                        {% endif %}
+
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">File Size</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ file_size_display }}</dd>
+                        </div>
+
+                        {% if image.aspect_ratio %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Aspect Ratio</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ "%.2f"|format(image.aspect_ratio) }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+
+                <!-- Source Info -->
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Source Info</h2>
+                    <dl class="space-y-3">
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Source</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">
+                                <a href="/browse?source={{ image.source_id | urlencode }}"
+                                   class="text-primary hover:underline">
+                                    {{ image.source_id }}
+                                </a>
+                            </dd>
+                        </div>
+
+                        {% if image.category %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Category</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white capitalize">{{ image.category }}</dd>
+                        </div>
+                        {% endif %}
+
+                        {% if image.purity %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Purity</dt>
+                            <dd class="text-sm font-medium uppercase
+                                       {% if image.purity == 'sfw' %}text-green-600 dark:text-green-400
+                                       {% elif image.purity == 'sketchy' %}text-orange-600 dark:text-orange-400
+                                       {% else %}text-red-600 dark:text-red-400{% endif %}">
+                                {{ image.purity }}
+                            </dd>
+                        </div>
+                        {% endif %}
+
+                        {% if image.uploader %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Uploader</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ image.uploader }}</dd>
+                        </div>
+                        {% endif %}
+
+                        {% if image.views %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Views (source)</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ image.views | int }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+
+                <!-- Usage Stats -->
+                <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4">
+                    <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Usage Stats</h2>
+                    <dl class="space-y-3">
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Times Shown</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ image.times_shown }}</dd>
+                        </div>
+
+                        {% if image.last_shown_display %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Last Shown</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white">{{ image.last_shown_display }}</dd>
+                        </div>
+                        {% endif %}
+
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Status</dt>
+                            <dd class="text-sm font-medium">
+                                {% if image.is_favorite %}
+                                <span class="text-red-600 dark:text-red-400">Favorited</span>
+                                {% else %}
+                                <span class="text-gray-500 dark:text-gray-400">Normal</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+
+                        {% if image.palette_status %}
+                        <div class="flex justify-between">
+                            <dt class="text-sm text-gray-500 dark:text-gray-400">Palette Status</dt>
+                            <dd class="text-sm font-medium text-gray-900 dark:text-white capitalize">{{ image.palette_status }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

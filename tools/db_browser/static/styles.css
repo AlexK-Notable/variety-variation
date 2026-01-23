@@ -1,0 +1,13 @@
+/* Variety Database Browser - Custom Styles */
+/* Tailwind CSS will be loaded via CDN in base.html (Phase 2) */
+/* This file is for any custom overrides */
+
+:root {
+    --color-primary: #3b82f6;
+    --color-success: #22c55e;
+    --color-danger: #ef4444;
+    --color-bg: #f9fafb;
+    --color-bg-dark: #111827;
+}
+
+/* Placeholder for Phase 2+ styles */

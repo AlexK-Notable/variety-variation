@@ -1,0 +1,109 @@
+<!-- Single Image Card -->
+<div class="image-card group relative bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden
+            border border-gray-200 dark:border-gray-700 hover:shadow-md">
+
+    <!-- Image Container -->
+    <a href="/image/{{ image.filepath | b64encode }}"
+       class="block aspect-video bg-gray-100 dark:bg-gray-900 relative overflow-hidden">
+
+        <!-- Thumbnail - Phase 3 will serve actual images, for now use placeholder -->
+        {% if image.filepath %}
+        <img src="/preview/{{ image.filepath | b64encode }}"
+             alt="{{ image.filename }}"
+             loading="lazy"
+             class="w-full h-full object-cover"
+             onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%23374151%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22%236b7280%22 font-size=%2210%22>No Preview</text></svg>'">
+        {% else %}
+        <div class="w-full h-full flex items-center justify-center text-gray-400">
+            <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+            </svg>
+        </div>
+        {% endif %}
+
+        <!-- Overlay badges -->
+        <div class="absolute top-2 left-2 flex gap-1">
+            {% if image.is_favorite %}
+            <span class="favorite-badge px-1.5 py-0.5 bg-red-500 text-white text-xs rounded">
+                ❤️
+            </span>
+            {% endif %}
+            {% if image.purity and image.purity != 'sfw' %}
+            <span class="px-1.5 py-0.5 bg-orange-500 text-white text-xs rounded uppercase">
+                {{ image.purity }}
+            </span>
+            {% endif %}
+        </div>
+
+        <!-- Hover overlay with actions -->
+        <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100
+                    transition-opacity flex items-center justify-center gap-2">
+            <!-- Quick favorite toggle -->
+            <button class="p-2 bg-white/90 rounded-full hover:bg-white transition-colors favorite-btn
+                          {% if image.is_favorite %}is-favorite{% endif %}"
+                    hx-post="/api/images/{{ image.filepath | b64encode }}/favorite"
+                    hx-swap="none"
+                    title="{% if image.is_favorite %}Unfavorite{% else %}Favorite{% endif %}"
+                    onclick="event.preventDefault(); event.stopPropagation();"
+                    hx-on::after-request="
+                        const resp = JSON.parse(event.detail.xhr.responseText);
+                        const btn = this;
+                        const card = btn.closest('.image-card');
+                        const svg = btn.querySelector('svg');
+                        const badge = card.querySelector('.favorite-badge');
+                        if (resp.is_favorite) {
+                            btn.classList.add('is-favorite');
+                            svg.setAttribute('fill', 'currentColor');
+                            btn.title = 'Unfavorite';
+                            if (!badge) {
+                                const badgeContainer = card.querySelector('.absolute.top-2');
+                                const newBadge = document.createElement('span');
+                                newBadge.className = 'favorite-badge px-1.5 py-0.5 bg-red-500 text-white text-xs rounded';
+                                newBadge.textContent = '❤️';
+                                badgeContainer.insertBefore(newBadge, badgeContainer.firstChild);
+                            }
+                        } else {
+                            btn.classList.remove('is-favorite');
+                            svg.setAttribute('fill', 'none');
+                            btn.title = 'Favorite';
+                            if (badge) badge.remove();
+                        }
+                    ">
+                <svg class="w-5 h-5" fill="{% if image.is_favorite %}currentColor{% else %}none{% endif %}"
+                     stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+                </svg>
+            </button>
+
+            <!-- Open source link -->
+            {% if image.source_url %}
+            <a href="{{ image.source_url }}"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="p-2 bg-white/90 rounded-full hover:bg-white transition-colors"
+               title="Open source"
+               onclick="event.stopPropagation();">
+                <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+            </a>
+            {% endif %}
+        </div>
+    </a>
+
+    <!-- Card Footer -->
+    <div class="p-2">
+        <p class="text-xs text-gray-600 dark:text-gray-400 truncate" title="{{ image.filename }}">
+            {{ image.filename }}
+        </p>
+        <div class="flex justify-between items-center mt-1 text-xs text-gray-400 dark:text-gray-500">
+            <span>{{ image.dimensions or '?' }}</span>
+            {% if image.times_shown > 0 %}
+            <span title="Times shown">👁 {{ image.times_shown }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
