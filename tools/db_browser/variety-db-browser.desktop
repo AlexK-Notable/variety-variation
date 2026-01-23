@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Variety DB Browser
+Comment=Browse and manage the Variety Smart Selection database
+Exec=python -m tools.db_browser.main
+Path=/home/komi/repos/variety-variation
+Icon=image-x-generic
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+Keywords=wallpaper;variety;database;browser;images;
