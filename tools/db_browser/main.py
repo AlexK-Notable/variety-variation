@@ -461,6 +461,7 @@ async def browse(
     source: Optional[str] = None,
     purity: Optional[str] = None,
     favorites_only: bool = False,
+    trashed_only: bool = False,
     search: Optional[str] = None,
     sort_by: str = "last_indexed_at",
     tag: Optional[str] = None,
@@ -477,6 +478,7 @@ async def browse(
         tag_name=tag,
         purity=purity,
         favorites_only=favorites_only,
+        trashed_only=trashed_only,
         search=search,
         sort_by=sort_by,
     )
@@ -498,6 +500,7 @@ async def browse(
         "source": source,
         "purity": purity,
         "favorites_only": favorites_only,
+        "trashed_only": trashed_only,
         "search": search,
         "sort_by": sort_by,
         "tag": tag,

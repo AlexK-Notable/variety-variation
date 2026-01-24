@@ -109,6 +109,7 @@ class DatabaseBrowser:
         tag_name: Optional[str] = None,
         purity: Optional[str] = None,
         favorites_only: bool = False,
+        trashed_only: bool = False,
         search: Optional[str] = None,
         sort_by: str = "last_indexed_at",
         sort_desc: bool = True,
@@ -119,14 +120,15 @@ class DatabaseBrowser:
             Tuple of (images, total_count)
         """
         with self._lock:
-            # Build query
+            # Build query - include is_trashed via subquery
             base_query = """
                 SELECT DISTINCT
                     i.filepath, i.filename, i.source_id,
                     i.width, i.height, i.aspect_ratio, i.file_size,
                     i.is_favorite, i.times_shown, i.last_shown_at,
                     i.palette_status,
-                    m.category, m.purity, m.source_url, m.uploader, m.views
+                    m.category, m.purity, m.source_url, m.uploader, m.views,
+                    EXISTS(SELECT 1 FROM user_actions ua WHERE ua.filepath = i.filepath AND ua.action = 'trash') AS is_trashed
                 FROM images i
                 LEFT JOIN image_metadata m ON i.filepath = m.filepath
             """
@@ -163,6 +165,11 @@ class DatabaseBrowser:
 
             if favorites_only:
                 conditions.append("i.is_favorite = 1")
+
+            if trashed_only:
+                conditions.append(
+                    "EXISTS(SELECT 1 FROM user_actions ua WHERE ua.filepath = i.filepath AND ua.action = 'trash')"
+                )
 
             if search:
                 conditions.append("(i.filename LIKE ? OR i.filepath LIKE ?)")
@@ -212,7 +219,8 @@ class DatabaseBrowser:
                     i.width, i.height, i.aspect_ratio, i.file_size,
                     i.is_favorite, i.times_shown, i.last_shown_at,
                     i.palette_status,
-                    m.category, m.purity, m.source_url, m.uploader, m.views
+                    m.category, m.purity, m.source_url, m.uploader, m.views,
+                    EXISTS(SELECT 1 FROM user_actions ua WHERE ua.filepath = i.filepath AND ua.action = 'trash') AS is_trashed
                 FROM images i
                 LEFT JOIN image_metadata m ON i.filepath = m.filepath
                 WHERE i.filepath = ?
@@ -398,8 +406,13 @@ class DatabaseBrowser:
 
     # --- Helper Methods ---
 
-    def _row_to_image(self, row: sqlite3.Row) -> ImageResponse:
+    def _row_to_image(self, row: sqlite3.Row, include_trashed: bool = True) -> ImageResponse:
         """Convert a database row to ImageResponse."""
+        # is_trashed is only in the row when queried via get_images
+        is_trashed = False
+        if include_trashed and "is_trashed" in row.keys():
+            is_trashed = bool(row["is_trashed"])
+
         return ImageResponse(
             filepath=row["filepath"],
             filename=row["filename"],
@@ -409,6 +422,7 @@ class DatabaseBrowser:
             aspect_ratio=row["aspect_ratio"],
             file_size=row["file_size"],
             is_favorite=bool(row["is_favorite"]),
+            is_trashed=is_trashed,
             times_shown=row["times_shown"] or 0,
             last_shown_at=row["last_shown_at"],
             palette_status=row["palette_status"],

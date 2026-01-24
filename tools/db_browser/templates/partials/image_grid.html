@@ -10,7 +10,7 @@
         {% else %}
             {{ total }} images
         {% endif %}
-        {% if current_filters.source or current_filters.purity or current_filters.favorites_only or current_filters.tag or current_filters.search %}
+        {% if current_filters.source or current_filters.purity or current_filters.favorites_only or current_filters.trashed_only or current_filters.tag or current_filters.search %}
             <span class="text-blue-500 dark:text-blue-400">(filtered)</span>
         {% endif %}
     </p>
@@ -27,19 +27,93 @@
     {% endfor %}
 </div>
 
-<!-- Load More / Pagination -->
-{% if page < total_pages %}
-<div class="mt-8 flex justify-center">
-    <button class="px-6 py-3 bg-primary text-white rounded-lg
-                   hover:bg-blue-600 transition-colors
-                   flex items-center gap-2"
-            hx-get="/browse?page={{ page + 1 }}{% if current_filters.source %}&source={{ current_filters.source }}{% endif %}{% if current_filters.purity %}&purity={{ current_filters.purity }}{% endif %}{% if current_filters.favorites_only %}&favorites_only=1{% endif %}{% if current_filters.sort_by %}&sort_by={{ current_filters.sort_by }}{% endif %}{% if current_filters.search %}&search={{ current_filters.search }}{% endif %}{% if current_filters.tag %}&tag={{ current_filters.tag }}{% endif %}"
+<!-- Pagination -->
+{% if total_pages > 1 %}
+{% set filter_params %}{% if current_filters.source %}&source={{ current_filters.source }}{% endif %}{% if current_filters.purity %}&purity={{ current_filters.purity }}{% endif %}{% if current_filters.favorites_only %}&favorites_only=1{% endif %}{% if current_filters.trashed_only %}&trashed_only=1{% endif %}{% if current_filters.sort_by %}&sort_by={{ current_filters.sort_by }}{% endif %}{% if current_filters.search %}&search={{ current_filters.search }}{% endif %}{% if current_filters.tag %}&tag={{ current_filters.tag }}{% endif %}{% endset %}
+<div class="mt-8 flex justify-center items-center gap-2">
+    <!-- Previous Button -->
+    {% if page > 1 %}
+    <button class="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg
+                   hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center gap-1"
+            hx-get="/browse?page={{ page - 1 }}{{ filter_params }}"
             hx-target="#image-grid"
             hx-swap="innerHTML"
             hx-indicator="#grid-indicator">
-        <span>Load More</span>
-        <span class="text-sm opacity-75">({{ total - page * page_size }} remaining)</span>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Prev
     </button>
+    {% else %}
+    <button class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 rounded-lg cursor-not-allowed flex items-center gap-1" disabled>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Prev
+    </button>
+    {% endif %}
+
+    <!-- Page Numbers -->
+    <div class="flex items-center gap-1">
+        {% set start_page = [1, page - 2] | max %}
+        {% set end_page = [total_pages, page + 2] | min %}
+
+        {% if start_page > 1 %}
+        <button class="px-3 py-2 text-sm rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                hx-get="/browse?page=1{{ filter_params }}"
+                hx-target="#image-grid"
+                hx-swap="innerHTML"
+                hx-indicator="#grid-indicator">1</button>
+        {% if start_page > 2 %}
+        <span class="px-2 text-gray-400">...</span>
+        {% endif %}
+        {% endif %}
+
+        {% for p in range(start_page, end_page + 1) %}
+        {% if p == page %}
+        <span class="px-3 py-2 text-sm bg-primary text-white rounded-lg font-medium">{{ p }}</span>
+        {% else %}
+        <button class="px-3 py-2 text-sm rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
+                hx-get="/browse?page={{ p }}{{ filter_params }}"
+                hx-target="#image-grid"
+                hx-swap="innerHTML"
+                hx-indicator="#grid-indicator">{{ p }}</button>
+        {% endif %}
+        {% endfor %}
+
+        {% if end_page < total_pages %}
+        {% if end_page < total_pages - 1 %}
+        <span class="px-2 text-gray-400">...</span>
+        {% endif %}
+        <button class="px-3 py-2 text-sm rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                hx-get="/browse?page={{ total_pages }}{{ filter_params }}"
+                hx-target="#image-grid"
+                hx-swap="innerHTML"
+                hx-indicator="#grid-indicator">{{ total_pages }}</button>
+        {% endif %}
+    </div>
+
+    <!-- Next Button -->
+    {% if page < total_pages %}
+    <button class="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg
+                   hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center gap-1"
+            hx-get="/browse?page={{ page + 1 }}{{ filter_params }}"
+            hx-target="#image-grid"
+            hx-swap="innerHTML"
+            hx-indicator="#grid-indicator">
+        Next
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+    </button>
+    {% else %}
+    <button class="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 rounded-lg cursor-not-allowed flex items-center gap-1" disabled>
+        Next
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+    </button>
+    {% endif %}
 </div>
 {% endif %}
 

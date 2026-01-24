@@ -21,6 +21,7 @@ class ImageResponse(BaseModel):
     aspect_ratio: Optional[float] = None
     file_size: Optional[int] = None
     is_favorite: bool = False
+    is_trashed: bool = False
     times_shown: int = 0
     last_shown_at: Optional[int] = None
     palette_status: str = "pending"

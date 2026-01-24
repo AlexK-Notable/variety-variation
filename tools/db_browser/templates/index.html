@@ -10,7 +10,7 @@
         <div class="p-4 space-y-6">
 
             <!-- Active Filters Display -->
-            {% set has_filters = current_filters.source or current_filters.purity or current_filters.favorites_only or current_filters.search or current_filters.tag %}
+            {% set has_filters = current_filters.source or current_filters.purity or current_filters.favorites_only or current_filters.trashed_only or current_filters.search or current_filters.tag %}
             {% if has_filters %}
             <div class="space-y-2">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -49,13 +49,21 @@
                                 title="Clear favorites">&times;</button>
                     </span>
                     {% endif %}
+                    {% if current_filters.trashed_only %}
+                    <span class="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
+                        Trashed
+                        <button class="hover:text-gray-600 dark:hover:text-gray-100"
+                                onclick="document.querySelector('#trashed_only').checked=false; htmx.trigger(document.querySelector('#trashed_only'), 'change');"
+                                title="Clear trashed">&times;</button>
+                    </span>
+                    {% endif %}
                     {% if current_filters.tag %}
                     <span class="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200">
                         Tag: {{ current_filters.tag }}
                         <button class="hover:text-purple-600 dark:hover:text-purple-100"
                                 hx-get="/browse"
                                 hx-target="#image-grid"
-                                hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only'], [name='sort_by']"
+                                hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only'], [name='trashed_only'], [name='sort_by']"
                                 hx-indicator="#grid-indicator"
                                 title="Clear tag">&times;</button>
                     </span>
@@ -81,7 +89,7 @@
                            hx-get="/browse"
                            hx-trigger="keyup changed delay:300ms"
                            hx-target="#image-grid"
-                           hx-include="[name='source'], [name='purity'], [name='favorites_only'], [name='sort_by']"
+                           hx-include="[name='source'], [name='purity'], [name='favorites_only'], [name='trashed_only'], [name='sort_by']"
                            hx-indicator="#grid-indicator">
                     {% if current_filters.search %}
                     <button class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
@@ -107,7 +115,7 @@
                         hx-get="/browse"
                         hx-trigger="change"
                         hx-target="#image-grid"
-                        hx-include="[name='search'], [name='purity'], [name='favorites_only'], [name='sort_by']"
+                        hx-include="[name='search'], [name='purity'], [name='favorites_only'], [name='trashed_only'], [name='sort_by']"
                         hx-indicator="#grid-indicator">
                     <option value="">All Sources ({{ stats.image_count }})</option>
                     {% for source in sources %}
@@ -131,7 +139,7 @@
                         hx-get="/browse"
                         hx-trigger="change"
                         hx-target="#image-grid"
-                        hx-include="[name='search'], [name='source'], [name='favorites_only'], [name='sort_by']"
+                        hx-include="[name='search'], [name='source'], [name='favorites_only'], [name='trashed_only'], [name='sort_by']"
                         hx-indicator="#grid-indicator">
                     <option value="">All</option>
                     <option value="sfw" {% if current_filters.purity == 'sfw' %}selected{% endif %}>SFW</option>
@@ -151,10 +159,28 @@
                        hx-get="/browse"
                        hx-trigger="change"
                        hx-target="#image-grid"
-                       hx-include="[name='search'], [name='source'], [name='purity'], [name='sort_by']"
+                       hx-include="[name='search'], [name='source'], [name='purity'], [name='sort_by'], [name='trashed_only']"
                        hx-indicator="#grid-indicator">
                 <label for="favorites_only" class="text-sm text-gray-700 dark:text-gray-300 {% if current_filters.favorites_only %}text-red-600 dark:text-red-400 font-medium{% endif %}">
                     Favorites only {% if current_filters.favorites_only %}(active){% endif %}
+                </label>
+            </div>
+
+            <!-- Trashed Toggle -->
+            <div class="flex items-center gap-2">
+                <input type="checkbox"
+                       id="trashed_only"
+                       name="trashed_only"
+                       value="1"
+                       {% if current_filters.trashed_only %}checked{% endif %}
+                       class="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
+                       hx-get="/browse"
+                       hx-trigger="change"
+                       hx-target="#image-grid"
+                       hx-include="[name='search'], [name='source'], [name='purity'], [name='sort_by'], [name='favorites_only']"
+                       hx-indicator="#grid-indicator">
+                <label for="trashed_only" class="text-sm text-gray-700 dark:text-gray-300 {% if current_filters.trashed_only %}text-orange-600 dark:text-orange-400 font-medium{% endif %}">
+                    Trashed only {% if current_filters.trashed_only %}(active){% endif %}
                 </label>
             </div>
 
@@ -169,7 +195,7 @@
                         hx-get="/browse"
                         hx-trigger="change"
                         hx-target="#image-grid"
-                        hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only']"
+                        hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only'], [name='trashed_only']"
                         hx-indicator="#grid-indicator">
                     <option value="last_indexed_at" {% if current_filters.sort_by == 'last_indexed_at' %}selected{% endif %}>
                         Recently Added
@@ -205,7 +231,7 @@
                                    {% endif %}"
                             hx-get="/browse?tag={{ tag.name | urlencode }}"
                             hx-target="#image-grid"
-                            hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only'], [name='sort_by']"
+                            hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only'], [name='trashed_only'], [name='sort_by']"
                             hx-indicator="#grid-indicator"
                             title="{{ tag.count }} images">
                         {{ tag.name }}

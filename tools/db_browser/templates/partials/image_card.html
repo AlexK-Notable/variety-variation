@@ -101,9 +101,17 @@
         </p>
         <div class="flex justify-between items-center mt-1 text-xs text-gray-400 dark:text-gray-500">
             <span>{{ image.dimensions or '?' }}</span>
-            {% if image.times_shown > 0 %}
-            <span title="Times shown">👁 {{ image.times_shown }}</span>
-            {% endif %}
+            <div class="flex items-center gap-1">
+                {% if image.is_favorite %}
+                <span class="text-red-500" title="Favorited">❤️</span>
+                {% endif %}
+                {% if image.is_trashed %}
+                <span class="text-gray-500" title="Trashed">🗑️</span>
+                {% endif %}
+                {% if image.times_shown > 0 %}
+                <span title="Times shown">👁 {{ image.times_shown }}</span>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>
