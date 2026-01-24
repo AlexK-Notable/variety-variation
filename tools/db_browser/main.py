@@ -587,6 +587,16 @@ async def image_detail(
         "source_count": database.get_source_count(),
     }
 
+    # Get Variety sources and exclusions for tag styling
+    try:
+        variety_sources = [s.lower() for s in _get_wallhaven_sources()]
+    except Exception:
+        variety_sources = []
+    try:
+        variety_exclusions = [e.lower() for e in _get_wallhaven_exclusions()]
+    except Exception:
+        variety_exclusions = []
+
     context = {
         "request": request,
         "image": image,
@@ -596,6 +606,8 @@ async def image_detail(
         "encoded_path": encoded_path,
         "file_size_display": format_file_size(image.file_size),
         "stats": stats,
+        "variety_sources": variety_sources,
+        "variety_exclusions": variety_exclusions,
     }
 
     return templates.TemplateResponse("detail.html", context)

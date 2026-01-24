@@ -59,19 +59,41 @@
                     <h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Tags</h2>
                     <div class="flex flex-wrap gap-2">
                         {% for tag in tags %}
+                        {% set is_source = tag.name.lower() in variety_sources %}
+                        {% set is_excluded = tag.name.lower() in variety_exclusions %}
                         <div class="group relative inline-flex items-center">
                             <a href="/browse?tag={{ tag.name | urlencode }}"
-                               class="px-3 py-1 text-sm rounded-l-full bg-gray-100 dark:bg-gray-700
-                                      text-gray-700 dark:text-gray-300 hover:bg-primary hover:text-white
-                                      transition-colors">
+                               class="px-3 py-1 text-sm rounded-l-full transition-colors
+                                      {% if is_source %}
+                                      bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800
+                                      {% elif is_excluded %}
+                                      bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800
+                                      {% else %}
+                                      bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-primary hover:text-white
+                                      {% endif %}"
+                               title="{% if is_source %}Source tag{% elif is_excluded %}Excluded tag{% endif %}">
+                                {% if is_source %}
+                                <svg class="w-3 h-3 inline mr-1 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                                {% elif is_excluded %}
+                                <svg class="w-3 h-3 inline mr-1 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                                {% endif %}
                                 {{ tag.name }}
                             </a>
                             <!-- Tag action dropdown -->
                             <div class="relative">
                                 <button onclick="this.nextElementSibling.classList.toggle('hidden')"
-                                        class="px-2 py-1 text-sm rounded-r-full bg-gray-200 dark:bg-gray-600
-                                               text-gray-500 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-500
-                                               transition-colors border-l border-gray-300 dark:border-gray-500">
+                                        class="px-2 py-1 text-sm rounded-r-full transition-colors border-l
+                                               {% if is_source %}
+                                               bg-green-200 dark:bg-green-800 text-green-600 dark:text-green-400 hover:bg-green-300 dark:hover:bg-green-700 border-green-300 dark:border-green-700
+                                               {% elif is_excluded %}
+                                               bg-red-200 dark:bg-red-800 text-red-600 dark:text-red-400 hover:bg-red-300 dark:hover:bg-red-700 border-red-300 dark:border-red-700
+                                               {% else %}
+                                               bg-gray-200 dark:bg-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-500 border-gray-300 dark:border-gray-500
+                                               {% endif %}">
                                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
                                     </svg>
@@ -80,20 +102,30 @@
                                     <button hx-post="/api/variety/sources/{{ tag.name | urlencode }}"
                                             hx-swap="none"
                                             onclick="this.parentElement.classList.add('hidden')"
-                                            class="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-green-100 dark:hover:bg-green-900 hover:text-green-700 dark:hover:text-green-300 rounded-t-lg flex items-center gap-2">
+                                            class="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-green-100 dark:hover:bg-green-900 hover:text-green-700 dark:hover:text-green-300 rounded-t-lg flex items-center gap-2
+                                                   {% if is_source %}bg-green-50 dark:bg-green-950{% endif %}">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            {% if is_source %}
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                            {% else %}
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                            {% endif %}
                                         </svg>
-                                        Add as Source
+                                        {% if is_source %}Already Source{% else %}Add as Source{% endif %}
                                     </button>
                                     <button hx-post="/api/variety/exclusions/{{ tag.name | urlencode }}"
                                             hx-swap="none"
                                             onclick="this.parentElement.classList.add('hidden')"
-                                            class="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-red-100 dark:hover:bg-red-900 hover:text-red-700 dark:hover:text-red-300 rounded-b-lg flex items-center gap-2">
+                                            class="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-red-100 dark:hover:bg-red-900 hover:text-red-700 dark:hover:text-red-300 rounded-b-lg flex items-center gap-2
+                                                   {% if is_excluded %}bg-red-50 dark:bg-red-950{% endif %}">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            {% if is_excluded %}
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                            {% else %}
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                                            {% endif %}
                                         </svg>
-                                        Exclude Tag
+                                        {% if is_excluded %}Already Excluded{% else %}Exclude Tag{% endif %}
                                     </button>
                                 </div>
                             </div>
