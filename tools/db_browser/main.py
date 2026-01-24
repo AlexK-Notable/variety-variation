@@ -248,6 +248,185 @@ async def list_tags(
     return database.get_tags(limit=limit)
 
 
+# --- Variety Config Management ---
+
+VARIETY_CONF_PATH = os.path.expanduser("~/.config/variety/variety.conf")
+
+
+def _read_variety_conf() -> List[str]:
+    """Read variety.conf as lines."""
+    if not os.path.exists(VARIETY_CONF_PATH):
+        raise HTTPException(404, "variety.conf not found")
+    with open(VARIETY_CONF_PATH, "r") as f:
+        return f.readlines()
+
+
+def _write_variety_conf(lines: List[str]) -> None:
+    """Write lines back to variety.conf."""
+    with open(VARIETY_CONF_PATH, "w") as f:
+        f.writelines(lines)
+
+
+def _get_wallhaven_sources() -> List[str]:
+    """Get list of current wallhaven source tags."""
+    lines = _read_variety_conf()
+    sources = []
+    in_sources = False
+    for line in lines:
+        if line.strip() == "[sources]":
+            in_sources = True
+            continue
+        if in_sources:
+            if line.startswith("[") and line.strip().endswith("]"):
+                break  # Next section
+            if "|wallhaven|" in line:
+                # Parse: srcN = True|wallhaven|tagname
+                parts = line.split("|")
+                if len(parts) >= 3:
+                    sources.append(parts[2].strip())
+    return sources
+
+
+def _get_wallhaven_exclusions() -> List[str]:
+    """Get list of current exclusion tags."""
+    lines = _read_variety_conf()
+    for line in lines:
+        if line.startswith("wallhaven_exclusions"):
+            # Parse: wallhaven_exclusions = True|tag1;True|tag2;...
+            _, _, value = line.partition("=")
+            value = value.strip()
+            exclusions = []
+            for item in value.split(";"):
+                parts = item.split("|")
+                if len(parts) >= 2:
+                    exclusions.append(parts[1].strip())
+            return exclusions
+    return []
+
+
+@app.get("/api/variety/sources")
+async def get_variety_sources():
+    """Get current wallhaven source tags."""
+    return {"sources": _get_wallhaven_sources()}
+
+
+@app.get("/api/variety/exclusions")
+async def get_variety_exclusions():
+    """Get current exclusion tags."""
+    return {"exclusions": _get_wallhaven_exclusions()}
+
+
+@app.post("/api/variety/sources/{tag}")
+async def add_variety_source(tag: str):
+    """Add a tag as a wallhaven source."""
+    tag = unquote(tag).strip().lower()
+    if not tag:
+        raise HTTPException(400, "Tag cannot be empty")
+
+    # Check if already exists
+    existing = _get_wallhaven_sources()
+    if tag in [s.lower() for s in existing]:
+        return Response(
+            content=f'{{"success": false, "message": "Tag \\"{tag}\\" already in sources"}}',
+            media_type="application/json",
+            headers={"HX-Trigger": f'{{"showToast": {{"message": "Tag \\"{tag}\\" already in sources", "type": "info"}}}}'},
+        )
+
+    # Find next source number and add after [sources] section
+    lines = _read_variety_conf()
+    new_lines = []
+    in_sources = False
+    last_src_num = 0
+    insert_index = None
+
+    for i, line in enumerate(lines):
+        new_lines.append(line)
+        if line.strip() == "[sources]":
+            in_sources = True
+            continue
+        if in_sources:
+            if line.startswith("[") and line.strip().endswith("]"):
+                in_sources = False
+                insert_index = i  # Insert before next section
+            elif line.startswith("src"):
+                # Extract source number
+                match = line.split("=")[0].strip()
+                if match.startswith("src"):
+                    try:
+                        num = int(match[3:])
+                        last_src_num = max(last_src_num, num)
+                        insert_index = i + 1  # Insert after this line
+                    except ValueError:
+                        pass
+
+    # Add new source
+    new_src_line = f"src{last_src_num + 1} = True|wallhaven|{tag}\n"
+    if insert_index is not None:
+        new_lines.insert(insert_index, new_src_line)
+    else:
+        # Append at end if no sources section found
+        new_lines.append(new_src_line)
+
+    _write_variety_conf(new_lines)
+
+    return Response(
+        content=f'{{"success": true, "message": "Added \\"{tag}\\" to sources"}}',
+        media_type="application/json",
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "Added \\"{tag}\\" to sources", "type": "success"}}}}'},
+    )
+
+
+@app.post("/api/variety/exclusions/{tag}")
+async def add_variety_exclusion(tag: str):
+    """Add a tag to the global exclusions list."""
+    tag = unquote(tag).strip().lower()
+    if not tag:
+        raise HTTPException(400, "Tag cannot be empty")
+
+    # Check if already exists
+    existing = _get_wallhaven_exclusions()
+    if tag in [e.lower() for e in existing]:
+        return Response(
+            content=f'{{"success": false, "message": "Tag \\"{tag}\\" already excluded"}}',
+            media_type="application/json",
+            headers={"HX-Trigger": f'{{"showToast": {{"message": "Tag \\"{tag}\\" already excluded", "type": "info"}}}}'},
+        )
+
+    # Update exclusions line
+    lines = _read_variety_conf()
+    new_lines = []
+    found = False
+
+    for line in lines:
+        if line.startswith("wallhaven_exclusions"):
+            # Append new exclusion
+            line = line.rstrip()
+            if line.endswith("=") or line.endswith("= "):
+                line = f"{line}True|{tag}\n"
+            else:
+                line = f"{line};True|{tag}\n"
+            found = True
+        new_lines.append(line)
+
+    if not found:
+        # Add new exclusions line before [sources]
+        for i, line in enumerate(new_lines):
+            if line.strip() == "[sources]":
+                new_lines.insert(i, f"wallhaven_exclusions = True|{tag}\n")
+                found = True
+                break
+        if not found:
+            new_lines.append(f"wallhaven_exclusions = True|{tag}\n")
+
+    _write_variety_conf(new_lines)
+
+    return Response(
+        content=f'{{"success": true, "message": "Added \\"{tag}\\" to exclusions"}}',
+        media_type="application/json",
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "Added \\"{tag}\\" to exclusions", "type": "success"}}}}'},
+    )
+
+
 @app.get("/")
 async def index():
     """Redirect to browse page."""
