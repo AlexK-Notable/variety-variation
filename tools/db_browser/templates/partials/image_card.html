@@ -77,6 +77,38 @@
                 </svg>
             </button>
 
+            <!-- Quick trash toggle -->
+            <button class="p-2 bg-white/90 rounded-full hover:bg-white transition-colors trash-btn
+                          {% if image.is_trashed %}is-trashed{% endif %}"
+                    hx-post="/api/images/{{ image.filepath | b64encode }}/trash"
+                    hx-swap="none"
+                    title="{% if image.is_trashed %}Already trashed{% else %}Mark as trash{% endif %}"
+                    onclick="event.preventDefault(); event.stopPropagation();"
+                    hx-on::after-request="
+                        const btn = this;
+                        const card = btn.closest('.image-card');
+                        const svg = btn.querySelector('svg');
+                        const footer = card.querySelector('.flex.items-center.gap-1');
+                        btn.classList.add('is-trashed');
+                        svg.setAttribute('fill', 'currentColor');
+                        btn.title = 'Already trashed';
+                        // Add trash badge to footer if not exists
+                        if (!footer.querySelector('.trash-badge')) {
+                            const trashBadge = document.createElement('span');
+                            trashBadge.className = 'trash-badge text-gray-500';
+                            trashBadge.title = 'Trashed';
+                            trashBadge.textContent = '🗑️';
+                            footer.insertBefore(trashBadge, footer.firstChild);
+                        }
+                    ">
+                <svg class="w-5 h-5 {% if image.is_trashed %}text-orange-500{% else %}text-gray-700{% endif %}"
+                     fill="{% if image.is_trashed %}currentColor{% else %}none{% endif %}"
+                     stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+            </button>
+
             <!-- Open source link -->
             {% if image.source_url %}
             <a href="{{ image.source_url }}"
@@ -103,10 +135,10 @@
             <span>{{ image.dimensions or '?' }}</span>
             <div class="flex items-center gap-1">
                 {% if image.is_favorite %}
-                <span class="text-red-500" title="Favorited">❤️</span>
+                <span class="favorite-footer-badge text-red-500" title="Favorited">❤️</span>
                 {% endif %}
                 {% if image.is_trashed %}
-                <span class="text-gray-500" title="Trashed">🗑️</span>
+                <span class="trash-badge text-gray-500" title="Trashed">🗑️</span>
                 {% endif %}
                 {% if image.times_shown > 0 %}
                 <span title="Times shown">👁 {{ image.times_shown }}</span>
