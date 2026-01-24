@@ -116,6 +116,18 @@
                                   d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
                         </svg>
                     </button>
+
+                    <!-- Shutdown button -->
+                    <button hx-post="/api/shutdown"
+                            hx-swap="none"
+                            hx-confirm="Shutdown the server?"
+                            class="p-2 rounded-lg hover:bg-red-100 dark:hover:bg-red-900 hover:text-red-600 dark:hover:text-red-400"
+                            title="Shutdown server">
+                        <svg class="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M5.636 5.636a9 9 0 1012.728 0M12 3v9"/>
+                        </svg>
+                    </button>
                 </div>
             </div>
         </div>

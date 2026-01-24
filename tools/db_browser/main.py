@@ -12,6 +12,8 @@ Usage:
 """
 
 import os
+import sys
+import signal
 import base64
 import math
 import mimetypes
@@ -424,6 +426,25 @@ async def add_variety_exclusion(tag: str):
         content=f'{{"success": true, "message": "Added \\"{tag}\\" to exclusions"}}',
         media_type="application/json",
         headers={"HX-Trigger": f'{{"showToast": {{"message": "Added \\"{tag}\\" to exclusions", "type": "success"}}}}'},
+    )
+
+
+@app.post("/api/shutdown")
+async def shutdown_server():
+    """Shutdown the server gracefully."""
+    # Schedule shutdown after response is sent
+    import asyncio
+
+    async def _shutdown():
+        await asyncio.sleep(0.5)  # Give time for response to be sent
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.create_task(_shutdown())
+
+    return Response(
+        content='{"success": true, "message": "Server shutting down..."}',
+        media_type="application/json",
+        headers={"HX-Trigger": '{"showToast": {"message": "Server shutting down...", "type": "info"}}'},
     )
 
 
