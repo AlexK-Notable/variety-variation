@@ -354,6 +354,15 @@
                 selectedIndex = -1;
             }
         });
+
+        // Refresh page when navigating back (bfcache)
+        // This ensures trash/favorite status is synced from database
+        window.addEventListener('pageshow', (e) => {
+            if (e.persisted) {
+                // Page was restored from bfcache, reload to get fresh data
+                location.reload();
+            }
+        });
     </script>
 
     {% block scripts %}{% endblock %}

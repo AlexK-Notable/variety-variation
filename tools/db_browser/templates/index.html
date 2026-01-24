@@ -268,7 +268,12 @@
         </div>
 
         <!-- Image Grid Container -->
-        <div id="image-grid">
+        <div id="image-grid"
+             hx-get="/browse?page={{ page }}"
+             hx-trigger="revealed"
+             hx-include="[name='search'], [name='source'], [name='purity'], [name='favorites_only'], [name='trashed_only'], [name='sort_by']"
+             hx-indicator="#grid-indicator"
+             data-page="{{ page }}">
             {% include "partials/image_grid.html" %}
         </div>
     </div>
