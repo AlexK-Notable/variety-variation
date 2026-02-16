@@ -1,0 +1,103 @@
+/* Example SwayNotificationCenter style template for Variety ThemeEngine
+ * Place at: ~/.config/wallust/templates/swaync.css
+ *
+ * Register in ~/.config/wallust/wallust.toml:
+ *   swaync = { template = "swaync.css", target = "/home/user/.config/swaync/style.css" }
+ *
+ * swaync reads style.css from its config directory automatically.
+ * Reload after changes: swaync-client --reload-css
+ */
+
+/* Control center (dropdown panel) */
+.control-center {
+  background: alpha({{background}}, 0.85);
+  border: 1px solid alpha({{color4}}, 0.50);
+  border-radius: 14px;
+  padding: 8px;
+  color: {{color15}};
+}
+
+.control-center .widget-title > label {
+  color: {{color15}};
+}
+
+.control-center .widget-title > button {
+  background: alpha({{color4}}, 0.30);
+  color: {{color15}};
+  border: 1px solid alpha({{color4}}, 0.40);
+  border-radius: 8px;
+}
+
+.control-center .widget-title > button:hover {
+  background: alpha({{color4}}, 0.60);
+}
+
+/* DND toggle */
+.control-center .widget-dnd > switch {
+  background: alpha({{color0}}, 0.60);
+  border: 1px solid alpha({{color4}}, 0.30);
+}
+
+.control-center .widget-dnd > switch:checked {
+  background: alpha({{color4}}, 0.80);
+}
+
+.control-center .widget-dnd > switch slider {
+  background: {{color15}};
+}
+
+/* Notification cards */
+.notification {
+  background: alpha({{background}}, 0.80);
+  border: 1px solid alpha({{color4}}, 0.35);
+  border-radius: 10px;
+  margin: 4px 0;
+}
+
+.notification:hover {
+  border-color: alpha({{color4}}, 0.60);
+}
+
+.summary {
+  color: {{color15}};
+  font-weight: 700;
+}
+
+.body {
+  color: {{color7}};
+}
+
+.time {
+  color: {{color8}};
+}
+
+.app-name {
+  color: {{color6}};
+}
+
+/* Close button */
+.close-button {
+  background: alpha({{color1}}, 0.60);
+  color: {{color15}};
+  border-radius: 50%;
+}
+
+.close-button:hover {
+  background: alpha({{color9}}, 0.80);
+}
+
+/* Action buttons */
+.notification-action {
+  background: alpha({{color4}}, 0.30);
+  color: {{color15}};
+  border: 1px solid alpha({{color4}}, 0.30);
+  border-radius: 8px;
+}
+
+.notification-action:hover {
+  background: alpha({{color4}}, 0.50);
+}
+
+/* Derived color examples using filters */
+/* .notification.critical { border-color: {{color1 | saturate(0.3)}}; } */
+/* .summary { color: {{foreground | darken(0.05)}}; } */

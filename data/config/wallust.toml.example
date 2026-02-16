@@ -45,6 +45,7 @@ wofi = { template = "wofi.css", target = "~/.config/wofi/colors.css" }
 # Notification daemons
 dunst = { template = "dunst.conf", target = "~/.config/dunst/colors.conf" }
 mako = { template = "mako.conf", target = "~/.config/mako/colors" }
+swaync = { template = "swaync.css", target = "~/.config/swaync/style.css" }
 
 # Other
 gtk = { template = "gtk.css", target = "~/.config/gtk-3.0/colors.css" }

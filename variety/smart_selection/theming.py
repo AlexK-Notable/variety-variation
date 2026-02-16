@@ -382,7 +382,7 @@ ALLOWED_TARGET_DIRS = [
 SAFE_RELOAD_EXECUTABLES = {
     "hyprctl", "swaymsg", "i3-msg", "killall", "polybar-msg",
     "pkill", "kill", "systemctl", "dbus-send", "makoctl",
-    "kvantummanager", "dunst",
+    "kvantummanager", "dunst", "swaync-client",
 }
 
 
@@ -421,6 +421,7 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     # Notifications
     "dunst": "killall dunst; dunst &",
     "mako": "makoctl reload",
+    "swaync": "swaync-client --reload-css",
 
     # App-specific
     "zed_theme": None,  # Zed watches theme files
