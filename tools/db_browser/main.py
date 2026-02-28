@@ -209,7 +209,11 @@ async def mark_trash(
 ):
     """Mark an image as trashed.
 
-    This records a trash action in user_actions and clears favorite status.
+    This:
+    1. Records a trash action in user_actions
+    2. Clears favorite status
+    3. Adds the source URL to banned.txt (prevents redownloads)
+
     It does NOT delete the image from disk or database.
     """
     # Check readonly mode
@@ -519,11 +523,14 @@ async def browse(
         "current_filters": current_filters,
     }
 
-    # If HTMX request, return just the grid partial
-    if request.headers.get("HX-Request"):
+    # If HTMX request (but not a boosted link), return just the grid partial
+    # HX-Boosted is set when a link with hx-boost is clicked - needs full page
+    is_htmx = request.headers.get("HX-Request")
+    is_boosted = request.headers.get("HX-Boosted")
+    if is_htmx and not is_boosted:
         return templates.TemplateResponse("partials/image_grid.html", context)
 
-    # Full page render
+    # Full page render (including boosted navigation)
     return templates.TemplateResponse("index.html", context)
 
 

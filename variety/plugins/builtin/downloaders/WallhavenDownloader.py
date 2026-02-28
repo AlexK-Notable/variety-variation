@@ -46,6 +46,48 @@ class WallhavenDownloader(DefaultDownloader):
         self.legacy_downloader = WallhavenLegacyDownloader(source, location)
         self.parse_location()
 
+    def get_folder_name(self):
+        """
+        Override to exclude global exclusion terms from folder name.
+        Exclusion terms are part of the search query but should not affect
+        the folder name, so 'hdr -"anime girls" -nsfw' uses folder 'wallhaven_hdr'.
+        """
+        from variety.Util import Util
+
+        if self.config:
+            if self.config.startswith(("http://", "https://")):
+                # URL-based config - use as-is (no exclusions appended)
+                return self.get_source_type() + "_" + Util.convert_to_filename(self.config)
+            else:
+                # Keyword-based config - strip exclusion terms for folder name
+                # Get the actual exclusion terms from options to handle multi-word exclusions
+                # Multi-word terms are quoted: -"anime girls", single words: -nsfw
+                base_query = self.config
+                try:
+                    exclusions = self.source.variety.options.get_wallhaven_exclusions()
+                    for enabled, term in exclusions:
+                        if enabled:
+                            # Remove both quoted and unquoted exclusion patterns
+                            # Quoted: -"anime girls", Unquoted: -anime
+                            if " " in term:
+                                base_query = base_query.replace(f'-"{term}"', "")
+                            else:
+                                base_query = base_query.replace(f"-{term}", "")
+                except Exception:
+                    # Fallback: strip quoted phrases and single terms starting with '-'
+                    import re
+                    # Remove -"quoted phrases"
+                    base_query = re.sub(r'-"[^"]+"', "", base_query)
+                    # Remove -single_terms
+                    base_query = " ".join(
+                        term for term in base_query.split() if not term.startswith("-")
+                    )
+                # Clean up extra whitespace
+                base_query = " ".join(base_query.split())
+                return self.get_source_type() + "_" + Util.convert_to_filename(base_query)
+        else:
+            return self.get_source_name()
+
     def update_download_folder(self, global_download_folder):
         target_folder = super().update_download_folder(global_download_folder)
         self.legacy_downloader.target_folder = target_folder

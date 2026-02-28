@@ -16,8 +16,6 @@
 ### END LICENSE
 
 
-from __future__ import print_function
-
 import os
 import sys
 from setuptools.command.build_py import build_py as _build_py

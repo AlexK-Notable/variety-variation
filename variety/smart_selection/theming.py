@@ -401,7 +401,7 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     "alacritty": None,
     "kitty": "killall -SIGUSR1 kitty",
     "foot": None,
-    "ghostty": None,
+    "ghostty": "pkill -USR2 ghostty",  # Ghostty has no file watcher; SIGUSR2 triggers reload
 
     # GTK (apps pick up on next window open)
     "gtk3": None,
@@ -432,7 +432,6 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     "ignomi": None,
     "zathura": None,
 }
-
 
 @dataclass
 class TemplateConfig:
@@ -872,14 +871,16 @@ class ThemeEngine:
             logger.warning(f"Reload command failed for {template_name}: {e}")
 
     def _run_reload_commands_async(
-        self, reload_commands: List[Tuple[str, str]], generation: int
+        self, reload_commands: List[Tuple[str, str]]
     ) -> None:
         """Run reload commands in background thread with coalescing.
 
         Args:
             reload_commands: List of (template_name, command) tuples.
-            generation: Generation counter to detect stale requests.
         """
+        self._reload_generation += 1
+        generation = self._reload_generation
+
         def runner():
             for name, command in reload_commands:
                 # Skip if stale (newer wallpaper requested)
@@ -900,7 +901,6 @@ class ThemeEngine:
                     with self._reload_lock:
                         self._pending_reloads.discard(command)
 
-        self._reload_generation += 1
         self._reload_thread = threading.Thread(target=runner, daemon=True)
         self._reload_thread.start()
 
@@ -1026,7 +1026,7 @@ class ThemeEngine:
 
         # Run reload commands asynchronously
         if reload_commands:
-            self._run_reload_commands_async(reload_commands, self._reload_generation)
+            self._run_reload_commands_async(reload_commands)
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(

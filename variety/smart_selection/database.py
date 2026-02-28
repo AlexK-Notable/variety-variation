@@ -34,7 +34,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -197,6 +197,7 @@ class ImageDatabase:
             4: self._migrate_v3_to_v4,
             5: self._migrate_v4_to_v5,
             6: self._migrate_v5_to_v6,
+            7: self._migrate_v6_to_v7,
         }
 
         with self._lock:
@@ -372,6 +373,89 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info("Migration v5→v6: Metadata tracking tables created")
+
+    def _migrate_v6_to_v7(self):
+        """Migrate schema from v6 to v7.
+
+        Extends tags table for the Wallhaven tag scraping pipeline:
+        - popularity_rank: Position in most-tagged sort
+        - wallpaper_count: Number of wallpapers with this tag
+        - alias_source: Where alias came from ('firecrawl', 'api', 'organic')
+        - alias_updated_at: When alias was last updated
+        - scraped_at: When tag was scraped from list page
+        - detail_fetched_at: When tag detail was fetched
+
+        Adds scrape job tracking tables:
+        - scrape_jobs: Track Firecrawl/API batch jobs
+        - tag_scrape_status: Track individual tag fetch status
+        """
+        cursor = self.conn.cursor()
+
+        # Check existing columns for idempotent migration
+        cursor.execute("PRAGMA table_info(tags)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Add new columns to tags table
+        new_columns = [
+            ('popularity_rank', 'INTEGER'),
+            ('wallpaper_count', 'INTEGER'),
+            ('alias_source', 'TEXT'),
+            ('alias_updated_at', 'INTEGER'),
+            ('scraped_at', 'INTEGER'),
+            ('detail_fetched_at', 'INTEGER'),
+        ]
+        for col_name, col_type in new_columns:
+            if col_name not in columns:
+                cursor.execute(f'ALTER TABLE tags ADD COLUMN {col_name} {col_type}')
+                logger.info(f"Migration v6→v7: Added {col_name} column to tags")
+
+        # Index for efficient popularity queries
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_popularity ON tags(popularity_rank)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_wallpaper_count ON tags(wallpaper_count DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_alias ON tags(alias)')
+
+        # scrape_jobs table for tracking batch jobs
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS scrape_jobs (
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at INTEGER,
+                completed_at INTEGER,
+                progress_cursor TEXT,
+                items_total INTEGER DEFAULT 0,
+                items_completed INTEGER DEFAULT 0,
+                credits_budget INTEGER,
+                credits_used INTEGER DEFAULT 0,
+                error_message TEXT,
+                metadata TEXT
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_scrape_jobs_status ON scrape_jobs(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_scrape_jobs_type ON scrape_jobs(job_type)')
+        logger.info("Migration v6→v7: Created scrape_jobs table")
+
+        # tag_scrape_status for individual tag tracking
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tag_scrape_status (
+                tag_id INTEGER PRIMARY KEY,
+                list_scraped INTEGER DEFAULT 0,
+                firecrawl_status TEXT,
+                firecrawl_job_id INTEGER,
+                firecrawl_attempted_at INTEGER,
+                api_status TEXT,
+                api_attempted_at INTEGER,
+                last_error TEXT,
+                FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE,
+                FOREIGN KEY (firecrawl_job_id) REFERENCES scrape_jobs(job_id)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tag_scrape_firecrawl ON tag_scrape_status(firecrawl_status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tag_scrape_api ON tag_scrape_status(api_status)')
+        logger.info("Migration v6→v7: Created tag_scrape_status table")
+
+        self.conn.commit()
+        logger.info("Migration v6→v7: Tag scraping pipeline tables created")
 
     def close(self):
         """Close the database connection.
@@ -1353,6 +1437,9 @@ class ImageDatabase:
         alias: Optional[str] = None,
         category: Optional[str] = None,
         purity: Optional[str] = None,
+        popularity_rank: Optional[int] = None,
+        wallpaper_count: Optional[int] = None,
+        alias_source: Optional[str] = None,
     ) -> int:
         """Insert or update a tag.
 
@@ -1362,21 +1449,41 @@ class ImageDatabase:
             alias: Alternative name for the tag.
             category: Tag category.
             purity: Tag purity rating.
+            popularity_rank: Position in most-tagged sort (lower = more popular).
+            wallpaper_count: Number of wallpapers with this tag.
+            alias_source: Where alias came from ('firecrawl', 'api', 'organic').
 
         Returns:
             The tag_id.
         """
+        now = int(time.time())
         with self._lock:
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT INTO tags (tag_id, name, alias, category, purity)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO tags (tag_id, name, alias, category, purity,
+                                  popularity_rank, wallpaper_count, alias_source,
+                                  alias_updated_at, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tag_id) DO UPDATE SET
                     name = excluded.name,
                     alias = COALESCE(excluded.alias, alias),
                     category = COALESCE(excluded.category, category),
-                    purity = COALESCE(excluded.purity, purity)
-            ''', (tag_id, name, alias, category, purity))
+                    purity = COALESCE(excluded.purity, purity),
+                    popularity_rank = COALESCE(excluded.popularity_rank, popularity_rank),
+                    wallpaper_count = COALESCE(excluded.wallpaper_count, wallpaper_count),
+                    alias_source = CASE
+                        WHEN excluded.alias IS NOT NULL AND excluded.alias != ''
+                        THEN COALESCE(excluded.alias_source, alias_source)
+                        ELSE alias_source
+                    END,
+                    alias_updated_at = CASE
+                        WHEN excluded.alias IS NOT NULL AND excluded.alias != ''
+                        THEN excluded.alias_updated_at
+                        ELSE alias_updated_at
+                    END,
+                    scraped_at = COALESCE(excluded.scraped_at, scraped_at)
+            ''', (tag_id, name, alias, category, purity, popularity_rank,
+                  wallpaper_count, alias_source, now if alias else None, now))
             self.conn.commit()
             return tag_id
 
@@ -1384,7 +1491,8 @@ class ImageDatabase:
         """Insert or update multiple tags.
 
         Args:
-            tags: List of dicts with keys: tag_id, name, alias, category, purity.
+            tags: List of dicts with keys: tag_id, name, and optional:
+                  alias, category, purity, popularity_rank, wallpaper_count, alias_source.
 
         Returns:
             List of tag_ids.
@@ -1392,18 +1500,38 @@ class ImageDatabase:
         if not tags:
             return []
 
+        now = int(time.time())
         with self._lock:
             cursor = self.conn.cursor()
             cursor.executemany('''
-                INSERT INTO tags (tag_id, name, alias, category, purity)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO tags (tag_id, name, alias, category, purity,
+                                  popularity_rank, wallpaper_count, alias_source,
+                                  alias_updated_at, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tag_id) DO UPDATE SET
                     name = excluded.name,
                     alias = COALESCE(excluded.alias, alias),
                     category = COALESCE(excluded.category, category),
-                    purity = COALESCE(excluded.purity, purity)
+                    purity = COALESCE(excluded.purity, purity),
+                    popularity_rank = COALESCE(excluded.popularity_rank, popularity_rank),
+                    wallpaper_count = COALESCE(excluded.wallpaper_count, wallpaper_count),
+                    alias_source = CASE
+                        WHEN excluded.alias IS NOT NULL AND excluded.alias != ''
+                        THEN COALESCE(excluded.alias_source, alias_source)
+                        ELSE alias_source
+                    END,
+                    alias_updated_at = CASE
+                        WHEN excluded.alias IS NOT NULL AND excluded.alias != ''
+                        THEN excluded.alias_updated_at
+                        ELSE alias_updated_at
+                    END,
+                    scraped_at = COALESCE(excluded.scraped_at, scraped_at)
             ''', [
-                (t['tag_id'], t['name'], t.get('alias'), t.get('category'), t.get('purity'))
+                (
+                    t['tag_id'], t['name'], t.get('alias'), t.get('category'), t.get('purity'),
+                    t.get('popularity_rank'), t.get('wallpaper_count'), t.get('alias_source'),
+                    now if t.get('alias') else None, now
+                )
                 for t in tags
             ])
             self.conn.commit()
@@ -1543,6 +1671,432 @@ class ImageDatabase:
                 LIMIT ?
             ''', (limit,))
             return [{'name': row[0], 'count': row[1]} for row in cursor.fetchall()]
+
+    def resolve_tag(self, query: str) -> Optional[Dict]:
+        """Resolve a tag name or alias to a tag record.
+
+        Performs case-insensitive matching on both name and alias fields.
+
+        Args:
+            query: Tag name or alias to look up.
+
+        Returns:
+            Tag dictionary if found, None otherwise.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            # Try exact match on name first (case-insensitive)
+            cursor.execute(
+                'SELECT * FROM tags WHERE LOWER(name) = LOWER(?)',
+                (query,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+
+            # Try exact match on alias
+            cursor.execute(
+                'SELECT * FROM tags WHERE LOWER(alias) = LOWER(?)',
+                (query,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+
+            # Try partial match on name
+            cursor.execute(
+                'SELECT * FROM tags WHERE LOWER(name) LIKE LOWER(?) ORDER BY popularity_rank ASC NULLS LAST LIMIT 1',
+                (f'%{query}%',)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+
+            # Try partial match on alias
+            cursor.execute(
+                'SELECT * FROM tags WHERE LOWER(alias) LIKE LOWER(?) ORDER BY popularity_rank ASC NULLS LAST LIMIT 1',
+                (f'%{query}%',)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def resolve_tags(self, queries: List[str]) -> Dict[str, Optional[Dict]]:
+        """Resolve multiple tag names/aliases to tag records.
+
+        Args:
+            queries: List of tag names or aliases.
+
+        Returns:
+            Dict mapping query string to tag dict (or None if not found).
+        """
+        results = {}
+        for query in queries:
+            results[query] = self.resolve_tag(query)
+        return results
+
+    def get_tags_needing_detail(self, limit: int = 100) -> List[Dict]:
+        """Get tags that have been list-scraped but need detail fetching.
+
+        Prioritizes by popularity_rank (most popular first).
+
+        Args:
+            limit: Maximum number of tags to return.
+
+        Returns:
+            List of tag dictionaries without alias data.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT t.* FROM tags t
+                LEFT JOIN tag_scrape_status ts ON t.tag_id = ts.tag_id
+                WHERE (t.alias IS NULL OR t.alias = '')
+                  AND (ts.firecrawl_status IS NULL OR ts.firecrawl_status = 'pending')
+                  AND (ts.api_status IS NULL OR ts.api_status = 'pending')
+                ORDER BY t.popularity_rank ASC NULLS LAST
+                LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_tags_for_api_fallback(self, limit: int = 100) -> List[Dict]:
+        """Get tags that failed Firecrawl and need API fallback.
+
+        Args:
+            limit: Maximum number of tags to return.
+
+        Returns:
+            List of tag dictionaries.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT t.* FROM tags t
+                JOIN tag_scrape_status ts ON t.tag_id = ts.tag_id
+                WHERE t.alias IS NULL
+                  AND ts.firecrawl_status = 'failed'
+                  AND (ts.api_status IS NULL OR ts.api_status = 'pending')
+                ORDER BY t.popularity_rank ASC NULLS LAST
+                LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # =========================================================================
+    # Scrape Job Tracking
+    # =========================================================================
+
+    def create_scrape_job(
+        self,
+        job_type: str,
+        credits_budget: Optional[int] = None,
+        metadata: Optional[str] = None,
+    ) -> int:
+        """Create a new scrape job record.
+
+        Args:
+            job_type: Type of job ('smoke_test', 'tag_list', 'tag_detail_firecrawl', 'tag_detail_api').
+            credits_budget: Maximum credits to use for this job.
+            metadata: JSON string with additional job data.
+
+        Returns:
+            The job_id.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO scrape_jobs (job_type, status, started_at, credits_budget, metadata)
+                VALUES (?, 'pending', ?, ?, ?)
+            ''', (job_type, int(time.time()), credits_budget, metadata))
+            self.conn.commit()
+            return cursor.lastrowid
+
+    def update_scrape_job(
+        self,
+        job_id: int,
+        status: Optional[str] = None,
+        items_total: Optional[int] = None,
+        items_completed: Optional[int] = None,
+        credits_used: Optional[int] = None,
+        progress_cursor: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ):
+        """Update a scrape job record.
+
+        Args:
+            job_id: The job ID to update.
+            status: New status ('pending', 'in_progress', 'completed', 'failed').
+            items_total: Total items to process.
+            items_completed: Items completed so far.
+            credits_used: Credits consumed so far.
+            progress_cursor: JSON cursor for resumption.
+            error_message: Error message if failed.
+        """
+        updates = []
+        values = []
+
+        if status is not None:
+            updates.append('status = ?')
+            values.append(status)
+            if status in ('completed', 'failed'):
+                updates.append('completed_at = ?')
+                values.append(int(time.time()))
+        if items_total is not None:
+            updates.append('items_total = ?')
+            values.append(items_total)
+        if items_completed is not None:
+            updates.append('items_completed = ?')
+            values.append(items_completed)
+        if credits_used is not None:
+            updates.append('credits_used = ?')
+            values.append(credits_used)
+        if progress_cursor is not None:
+            updates.append('progress_cursor = ?')
+            values.append(progress_cursor)
+        if error_message is not None:
+            updates.append('error_message = ?')
+            values.append(error_message)
+
+        if not updates:
+            return
+
+        values.append(job_id)
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                f'UPDATE scrape_jobs SET {", ".join(updates)} WHERE job_id = ?',
+                values
+            )
+            self.conn.commit()
+
+    def get_scrape_job(self, job_id: int) -> Optional[Dict]:
+        """Get a scrape job by ID.
+
+        Args:
+            job_id: The job ID.
+
+        Returns:
+            Job dictionary or None.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM scrape_jobs WHERE job_id = ?', (job_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_latest_job_by_type(self, job_type: str) -> Optional[Dict]:
+        """Get the most recent job of a given type.
+
+        Args:
+            job_type: The job type to look for.
+
+        Returns:
+            Job dictionary or None.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT * FROM scrape_jobs
+                WHERE job_type = ?
+                ORDER BY started_at DESC, job_id DESC
+                LIMIT 1
+            ''', (job_type,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_resumable_job(self, job_type: str) -> Optional[Dict]:
+        """Get an in-progress job that can be resumed.
+
+        Args:
+            job_type: The job type to look for.
+
+        Returns:
+            Job dictionary or None.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT * FROM scrape_jobs
+                WHERE job_type = ? AND status = 'in_progress'
+                ORDER BY started_at DESC, job_id DESC
+                LIMIT 1
+            ''', (job_type,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    # =========================================================================
+    # Tag Scrape Status Tracking
+    # =========================================================================
+
+    def update_tag_scrape_status(
+        self,
+        tag_id: int,
+        list_scraped: Optional[bool] = None,
+        firecrawl_status: Optional[str] = None,
+        firecrawl_job_id: Optional[int] = None,
+        api_status: Optional[str] = None,
+        last_error: Optional[str] = None,
+    ):
+        """Update or create scrape status for a tag.
+
+        Args:
+            tag_id: The tag ID.
+            list_scraped: Whether tag was found in list scrape.
+            firecrawl_status: Firecrawl fetch status ('pending', 'success', 'failed').
+            firecrawl_job_id: Associated Firecrawl job ID.
+            api_status: API fetch status ('pending', 'success', 'failed').
+            last_error: Last error message.
+        """
+        now = int(time.time())
+        with self._lock:
+            cursor = self.conn.cursor()
+
+            # Build upsert
+            columns = ['tag_id']
+            values = [tag_id]
+            update_parts = []
+
+            if list_scraped is not None:
+                columns.append('list_scraped')
+                values.append(1 if list_scraped else 0)
+                update_parts.append('list_scraped = excluded.list_scraped')
+
+            if firecrawl_status is not None:
+                columns.append('firecrawl_status')
+                values.append(firecrawl_status)
+                update_parts.append('firecrawl_status = excluded.firecrawl_status')
+                columns.append('firecrawl_attempted_at')
+                values.append(now)
+                update_parts.append('firecrawl_attempted_at = excluded.firecrawl_attempted_at')
+
+            if firecrawl_job_id is not None:
+                columns.append('firecrawl_job_id')
+                values.append(firecrawl_job_id)
+                update_parts.append('firecrawl_job_id = excluded.firecrawl_job_id')
+
+            if api_status is not None:
+                columns.append('api_status')
+                values.append(api_status)
+                update_parts.append('api_status = excluded.api_status')
+                columns.append('api_attempted_at')
+                values.append(now)
+                update_parts.append('api_attempted_at = excluded.api_attempted_at')
+
+            if last_error is not None:
+                columns.append('last_error')
+                values.append(last_error)
+                update_parts.append('last_error = excluded.last_error')
+
+            placeholders = ', '.join(['?'] * len(values))
+            update_clause = ', '.join(update_parts) if update_parts else 'tag_id = excluded.tag_id'
+
+            cursor.execute(f'''
+                INSERT INTO tag_scrape_status ({', '.join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT(tag_id) DO UPDATE SET {update_clause}
+            ''', values)
+            self.conn.commit()
+
+    def update_tag_scrape_status_batch(
+        self,
+        tag_ids: List[int],
+        list_scraped: Optional[bool] = None,
+        firecrawl_status: Optional[str] = None,
+        firecrawl_job_id: Optional[int] = None,
+    ):
+        """Batch update scrape status for multiple tags.
+
+        Args:
+            tag_ids: List of tag IDs.
+            list_scraped: Whether tags were found in list scrape.
+            firecrawl_status: Firecrawl fetch status.
+            firecrawl_job_id: Associated Firecrawl job ID.
+        """
+        if not tag_ids:
+            return
+
+        now = int(time.time())
+        with self._lock:
+            cursor = self.conn.cursor()
+
+            # Build the data tuples
+            data = []
+            for tag_id in tag_ids:
+                row = [tag_id]
+                if list_scraped is not None:
+                    row.append(1 if list_scraped else 0)
+                if firecrawl_status is not None:
+                    row.append(firecrawl_status)
+                    row.append(now)
+                if firecrawl_job_id is not None:
+                    row.append(firecrawl_job_id)
+                data.append(tuple(row))
+
+            # Build column list
+            columns = ['tag_id']
+            if list_scraped is not None:
+                columns.append('list_scraped')
+            if firecrawl_status is not None:
+                columns.extend(['firecrawl_status', 'firecrawl_attempted_at'])
+            if firecrawl_job_id is not None:
+                columns.append('firecrawl_job_id')
+
+            placeholders = ', '.join(['?'] * len(columns))
+            update_parts = [f'{col} = excluded.{col}' for col in columns if col != 'tag_id']
+            update_clause = ', '.join(update_parts) if update_parts else 'tag_id = excluded.tag_id'
+
+            cursor.executemany(f'''
+                INSERT INTO tag_scrape_status ({', '.join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT(tag_id) DO UPDATE SET {update_clause}
+            ''', data)
+            self.conn.commit()
+
+    def get_scrape_statistics(self) -> Dict:
+        """Get statistics about tag scraping progress.
+
+        Returns:
+            Dict with counts for various scrape states.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+
+            stats = {}
+
+            # Total tags
+            cursor.execute('SELECT COUNT(*) FROM tags')
+            stats['total_tags'] = cursor.fetchone()[0]
+
+            # Tags with aliases
+            cursor.execute('SELECT COUNT(*) FROM tags WHERE alias IS NOT NULL')
+            stats['tags_with_alias'] = cursor.fetchone()[0]
+
+            # Tags list-scraped
+            cursor.execute('SELECT COUNT(*) FROM tag_scrape_status WHERE list_scraped = 1')
+            stats['list_scraped'] = cursor.fetchone()[0]
+
+            # Firecrawl status counts
+            cursor.execute('''
+                SELECT firecrawl_status, COUNT(*) FROM tag_scrape_status
+                WHERE firecrawl_status IS NOT NULL
+                GROUP BY firecrawl_status
+            ''')
+            stats['firecrawl'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+            # API status counts
+            cursor.execute('''
+                SELECT api_status, COUNT(*) FROM tag_scrape_status
+                WHERE api_status IS NOT NULL
+                GROUP BY api_status
+            ''')
+            stats['api'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+            # Tags needing detail fetch (NULL or empty alias)
+            cursor.execute('''
+                SELECT COUNT(*) FROM tags t
+                WHERE (t.alias IS NULL OR t.alias = '')
+            ''')
+            stats['needs_detail'] = cursor.fetchone()[0]
+
+            return stats
 
     # =========================================================================
     # User Action Tracking

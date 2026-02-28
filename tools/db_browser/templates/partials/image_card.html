@@ -4,7 +4,8 @@
 
     <!-- Image Container -->
     <a href="/image/{{ image.filepath | b64encode }}"
-       class="block aspect-video bg-gray-100 dark:bg-gray-900 relative overflow-hidden">
+       hx-boost="true"
+       class="block aspect-video bg-gray-100 dark:bg-gray-900 relative overflow-hidden cursor-pointer">
 
         <!-- Thumbnail - Phase 3 will serve actual images, for now use placeholder -->
         {% if image.filepath %}
@@ -38,7 +39,8 @@
 
         <!-- Hover overlay with actions -->
         <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100
-                    transition-opacity flex items-center justify-center gap-2">
+                    transition-opacity flex items-center justify-center gap-2
+                    pointer-events-none group-hover:pointer-events-auto">
             <!-- Quick favorite toggle -->
             <button class="p-2 bg-white/90 rounded-full hover:bg-white transition-colors favorite-btn
                           {% if image.is_favorite %}is-favorite{% endif %}"

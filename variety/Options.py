@@ -942,10 +942,18 @@ class Options:
         """Get enabled exclusions as a space-separated string with '-' prefix.
 
         Returns:
-            String like "-anime -people -animals" for use in search queries.
+            String like '-anime -"juicy lips"' for use in search queries.
+            Multi-word terms are wrapped in quotes for the Wallhaven API.
         """
         enabled_terms = [excl[1] for excl in self.wallhaven_exclusions if excl[0]]
-        return " ".join(f"-{term}" for term in enabled_terms)
+        formatted = []
+        for term in enabled_terms:
+            if " " in term:
+                # Multi-word terms need quotes for Wallhaven API
+                formatted.append(f'-"{term}"')
+            else:
+                formatted.append(f"-{term}")
+        return " ".join(formatted)
 
     def set_defaults(self):
         self.change_enabled = True

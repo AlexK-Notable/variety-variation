@@ -7,11 +7,27 @@ Smart Selection Engine.
 """
 
 import sqlite3
+import subprocess
+import json
+import shutil
 import threading
 import time
 import os
+import logging
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
+from pathlib import Path
+
+try:
+    import gi
+    gi.require_version('GExiv2', '0.10')
+    from gi.repository import GExiv2
+    GEXIV2_AVAILABLE = True
+except (ImportError, ValueError):
+    GExiv2 = None
+    GEXIV2_AVAILABLE = False
+
+EXIFTOOL_AVAILABLE = shutil.which("exiftool") is not None
 
 from .models import (
     ImageResponse,
@@ -19,6 +35,9 @@ from .models import (
     TagResponse,
     PaletteResponse,
 )
+from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseBrowser:
@@ -377,8 +396,12 @@ class DatabaseBrowser:
     def record_trash(self, filepath: str) -> bool:
         """Record a trash action for an image.
 
+        This method:
+        1. Clears favorite status
+        2. Records the trash action in user_actions
+        3. Adds the source URL to Variety's banned.txt (prevents redownloads)
+
         Note: This does not delete the image from the database or disk.
-        It only records the user action for analytics.
 
         Returns:
             True if successful, False if readonly mode.
@@ -402,7 +425,15 @@ class DatabaseBrowser:
                 (filepath, "trash", int(time.time())),
             )
             self.conn.commit()
-            return True
+
+        # Add source URL to banned.txt (outside lock - file I/O)
+        source_url = read_source_url(filepath)
+        if source_url:
+            add_to_banned(source_url)
+        else:
+            logger.debug(f"No source URL found for {filepath}, skipping ban")
+
+        return True
 
     # --- Helper Methods ---
 
@@ -432,3 +463,110 @@ class DatabaseBrowser:
             uploader=row["uploader"],
             views=row["views"],
         )
+
+
+# --- Banned URL Integration ---
+
+def _normalize_source_url(url: Optional[str]) -> Optional[str]:
+    """Normalize a source URL (handle protocol-relative URLs)."""
+    if url and url.startswith("//"):
+        return "https:" + url
+    return url or None
+
+
+def _read_source_url_gexiv2(filepath: str) -> Optional[str]:
+    """Read sourceURL via GExiv2 (in-process, fastest)."""
+    if not GEXIV2_AVAILABLE:
+        return None
+    try:
+        metadata = GExiv2.Metadata()
+        metadata.open_path(filepath)
+        return metadata.try_get_tag_string("Xmp.variety.sourceURL")
+    except Exception as e:
+        logger.debug(f"GExiv2 failed for {filepath}: {e}")
+        return None
+
+
+def _read_source_url_exiftool(filepath: str) -> Optional[str]:
+    """Read sourceURL via exiftool subprocess."""
+    if not EXIFTOOL_AVAILABLE:
+        return None
+    try:
+        result = subprocess.run(
+            ["exiftool", "-s", "-s", "-s", "-XMP-variety:sourceURL", filepath],
+            capture_output=True, text=True, timeout=5,
+        )
+        url = result.stdout.strip()
+        return url if url else None
+    except Exception as e:
+        logger.debug(f"exiftool failed for {filepath}: {e}")
+        return None
+
+
+def _read_source_url_json(filepath: str) -> Optional[str]:
+    """Read sourceURL from .metadata.json sidecar file."""
+    json_path = filepath + ".metadata.json"
+    try:
+        with open(json_path, encoding="utf-8") as f:
+            info = json.loads(f.read())
+        return info.get("sourceURL")
+    except Exception:
+        return None
+
+
+def read_source_url(filepath: str) -> Optional[str]:
+    """Read the source URL from image metadata.
+
+    Tries three methods in order:
+    1. GExiv2 (in-process, requires PyGObject)
+    2. exiftool subprocess (requires exiftool installed)
+    3. .metadata.json sidecar file (Variety's fallback format)
+
+    Args:
+        filepath: Path to the image file.
+
+    Returns:
+        The source URL if found, None otherwise.
+    """
+    if not os.path.exists(filepath):
+        return None
+
+    for reader in (_read_source_url_gexiv2, _read_source_url_exiftool, _read_source_url_json):
+        url = reader(filepath)
+        if url:
+            return _normalize_source_url(url)
+
+    return None
+
+
+def add_to_banned(url: str, config_dir: Optional[str] = None) -> bool:
+    """Add a URL to Variety's banned.txt file.
+
+    Args:
+        url: The URL to ban (prevents future downloads).
+        config_dir: Variety config directory. Defaults to settings.variety_config_dir.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    if not url:
+        return False
+
+    if config_dir is None:
+        config_dir = settings.variety_config_dir
+
+    banned_file = Path(config_dir) / "banned.txt"
+
+    try:
+        # Ensure config directory exists
+        banned_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Append URL to banned list
+        with open(banned_file, "a", encoding="utf-8") as f:
+            f.write(url + "\n")
+
+        logger.info(f"Added URL to banned list: {url}")
+        return True
+    except Exception as e:
+        logger.error(f"Could not add URL to banned list: {e}")
+        return False

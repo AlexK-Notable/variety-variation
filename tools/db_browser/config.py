@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     default_page_size: int = 24
     max_page_size: int = 100
 
+    # Variety config directory (for banned.txt integration)
+    variety_config_dir: str = str(Path.home() / ".config/variety")
+
     # Security: Allowed directories for serving images
     # Images outside these directories will be rejected
     # Default: Variety's standard wallpaper locations
