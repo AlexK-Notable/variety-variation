@@ -191,6 +191,52 @@ def rgb_dict_to_hex(rgb: Dict[str, float]) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def calculate_palette_metrics(colors: Dict[str, str]) -> Dict[str, float]:
+    """Calculate derived color metrics from a palette dict.
+
+    Computes circular hue mean, average saturation, average lightness, and
+    color temperature from color0-15 keys present in the dict.
+
+    Args:
+        colors: Dict with keys color0-15 as hex strings (#RRGGBB).
+            Only color0-15 keys are used; other keys are ignored.
+
+    Returns:
+        Dict with avg_hue, avg_saturation, avg_lightness, color_temperature.
+        Returns empty dict if no color0-15 keys are present.
+    """
+    hues = []
+    saturations = []
+    lightnesses = []
+    temperatures = []
+
+    for i in range(16):
+        key = f'color{i}'
+        if key in colors:
+            h, s, l = hex_to_hsl(colors[key])
+            hues.append(h)
+            saturations.append(s)
+            lightnesses.append(l)
+            temperatures.append(calculate_temperature(h, s, l))
+
+    if not hues:
+        return {}
+
+    # Circular hue mean via atan2(sum_sin, sum_cos)
+    sin_sum = sum(math.sin(math.radians(h)) for h in hues)
+    cos_sum = sum(math.cos(math.radians(h)) for h in hues)
+    avg_hue = math.degrees(math.atan2(sin_sum, cos_sum))
+    if avg_hue < 0:
+        avg_hue += 360
+
+    return {
+        'avg_hue': avg_hue,
+        'avg_saturation': sum(saturations) / len(saturations),
+        'avg_lightness': sum(lightnesses) / len(lightnesses),
+        'color_temperature': sum(temperatures) / len(temperatures),
+    }
+
+
 def parse_wallust_json(json_data) -> Dict[str, Any]:
     """Parse wallust JSON output and calculate derived metrics.
 
@@ -242,34 +288,8 @@ def parse_wallust_json(json_data) -> Dict[str, Any]:
         logger.warning(f"Unknown wallust JSON format: {type(json_data)}")
         return result
 
-    # Calculate average metrics from the 16 colors
-    hues = []
-    saturations = []
-    lightnesses = []
-    temperatures = []
-
-    for i in range(16):
-        key = f'color{i}'
-        if key in result:
-            h, s, l = hex_to_hsl(result[key])
-            hues.append(h)
-            saturations.append(s)
-            lightnesses.append(l)
-            temperatures.append(calculate_temperature(h, s, l))
-
-    if hues:
-        # For hue, we need to handle circular average
-        # Convert to unit vectors and average
-        sin_sum = sum(math.sin(math.radians(h)) for h in hues)
-        cos_sum = sum(math.cos(math.radians(h)) for h in hues)
-        avg_hue = math.degrees(math.atan2(sin_sum, cos_sum))
-        if avg_hue < 0:
-            avg_hue += 360
-
-        result['avg_hue'] = avg_hue
-        result['avg_saturation'] = sum(saturations) / len(saturations)
-        result['avg_lightness'] = sum(lightnesses) / len(lightnesses)
-        result['color_temperature'] = sum(temperatures) / len(temperatures)
+    # Calculate and merge derived metrics from color0-15
+    result.update(calculate_palette_metrics(result))
 
     return result
 

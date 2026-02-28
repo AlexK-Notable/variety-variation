@@ -558,5 +558,351 @@ class TestColorSimilarity(unittest.TestCase):
         self.assertAlmostEqual(result_via_param, result_direct, places=6)
 
 
+class TestCalculatePaletteMetrics(unittest.TestCase):
+    """Tests for calculate_palette_metrics() extracted from parse_wallust_json().
+
+    Phase 0 refactoring: the metric computation (lines 245-272 of palette.py)
+    is extracted into a standalone function. These tests verify the extracted
+    function produces correct results for edge cases and maintains parity
+    with the original inline code.
+
+    Tests are written against the planned interface. They will fail with
+    ImportError until the feature code is implemented -- this is expected.
+    """
+
+    def _import_calculate_palette_metrics(self):
+        """Import the function under test, raising SkipTest if not yet implemented."""
+        try:
+            from variety.smart_selection.palette import calculate_palette_metrics
+            return calculate_palette_metrics
+        except ImportError:
+            raise unittest.SkipTest(
+                "calculate_palette_metrics not yet extracted (Phase 0 pending)"
+            )
+
+    # --- Happy Path ---
+
+    def test_all_red_palette_hue_near_zero(self):
+        """All-red palette (16x #FF0000) should have avg_hue near 0 or 360.
+
+        Bug caught: incorrect circular mean giving arbitrary hue for uniform input.
+        """
+        calc = self._import_calculate_palette_metrics()
+        colors = {f'color{i}': '#FF0000' for i in range(16)}
+        result = calc(colors)
+
+        self.assertIn('avg_hue', result)
+        # Hue 0 and 360 are equivalent on the color wheel
+        hue = result['avg_hue']
+        self.assertTrue(
+            hue < 5 or hue > 355,
+            f"All-red palette avg_hue should be near 0/360, got {hue}"
+        )
+
+    def test_all_blue_palette_hue_near_240(self):
+        """All-blue palette (16x #0000FF) should have avg_hue near 240.
+
+        Bug caught: hue calculation off by a constant or not using degrees.
+        """
+        calc = self._import_calculate_palette_metrics()
+        colors = {f'color{i}': '#0000FF' for i in range(16)}
+        result = calc(colors)
+
+        self.assertIn('avg_hue', result)
+        self.assertAlmostEqual(result['avg_hue'], 240, delta=5)
+
+    def test_returns_all_four_metric_keys(self):
+        """Result contains avg_hue, avg_saturation, avg_lightness, color_temperature.
+
+        Bug caught: missing key in returned dict breaks downstream consumers.
+        """
+        calc = self._import_calculate_palette_metrics()
+        colors = {f'color{i}': '#FF0000' for i in range(16)}
+        result = calc(colors)
+
+        for key in ['avg_hue', 'avg_saturation', 'avg_lightness', 'color_temperature']:
+            self.assertIn(key, result, f"Missing key '{key}' in result")
+
+    def test_warm_palette_positive_temperature(self):
+        """Warm palette (all oranges) should have positive color_temperature.
+
+        Bug caught: temperature sign inverted or not weighted by saturation.
+        """
+        calc = self._import_calculate_palette_metrics()
+        # Orange hue ~30 degrees, fully saturated
+        colors = {f'color{i}': '#FF8000' for i in range(16)}
+        result = calc(colors)
+
+        self.assertIn('color_temperature', result)
+        self.assertGreater(
+            result['color_temperature'], 0,
+            f"Orange palette should have positive temperature, got {result['color_temperature']}"
+        )
+
+    def test_cool_palette_negative_temperature(self):
+        """Cool palette (all blues) should have negative color_temperature.
+
+        Bug caught: temperature sign inverted for cool hues.
+        """
+        calc = self._import_calculate_palette_metrics()
+        colors = {f'color{i}': '#0000FF' for i in range(16)}
+        result = calc(colors)
+
+        self.assertIn('color_temperature', result)
+        self.assertLess(
+            result['color_temperature'], 0,
+            f"Blue palette should have negative temperature, got {result['color_temperature']}"
+        )
+
+    # --- Circular Hue Edge Cases ---
+
+    def test_circular_hue_wrapping_near_zero(self):
+        """8 colors at hue 350 + 8 at hue 10 should average near 0/360, NOT 180.
+
+        Bug caught: naive arithmetic mean of 350 and 10 gives 180 (wrong side
+        of the color wheel). Correct circular mean uses sin/cos averaging.
+        """
+        calc = self._import_calculate_palette_metrics()
+        from variety.smart_selection.palette import hsl_to_hex
+
+        colors = {}
+        for i in range(8):
+            colors[f'color{i}'] = hsl_to_hex(350, 1.0, 0.5)  # Near-red, just below 360
+        for i in range(8, 16):
+            colors[f'color{i}'] = hsl_to_hex(10, 1.0, 0.5)   # Near-red, just above 0
+
+        result = calc(colors)
+        hue = result['avg_hue']
+
+        # Circular mean of 350 and 10 should be near 0 (or equivalently 360)
+        # NOT near 180 which is the naive arithmetic mean
+        self.assertTrue(
+            hue < 20 or hue > 340,
+            f"Circular mean of hues 350 and 10 should be near 0/360, got {hue}. "
+            f"Naive arithmetic mean (180) indicates non-circular averaging."
+        )
+
+    def test_opposite_hues_does_not_crash(self):
+        """Hues at 0 and 180 (exact opposites) should not crash.
+
+        Bug caught: atan2(0, 0) is undefined when sin/cos sums cancel perfectly.
+        The function must handle this gracefully.
+        """
+        calc = self._import_calculate_palette_metrics()
+        from variety.smart_selection.palette import hsl_to_hex
+
+        colors = {}
+        for i in range(8):
+            colors[f'color{i}'] = hsl_to_hex(0, 1.0, 0.5)    # Red (hue 0)
+        for i in range(8, 16):
+            colors[f'color{i}'] = hsl_to_hex(180, 1.0, 0.5)   # Cyan (hue 180)
+
+        # Must not raise any exception
+        result = calc(colors)
+        self.assertIn('avg_hue', result)
+        # The hue value is mathematically ambiguous here, but must be a valid number
+        self.assertIsInstance(result['avg_hue'], float)
+        self.assertFalse(
+            result['avg_hue'] != result['avg_hue'],  # NaN check (NaN != NaN)
+            "avg_hue must not be NaN for opposite hues"
+        )
+
+    # --- Edge Cases: Unusual Inputs ---
+
+    def test_empty_palette_no_crash(self):
+        """Empty dict (no colorN keys) should return dict without crashing.
+
+        Bug caught: division by zero when no colors found, or KeyError on
+        missing color keys.
+        """
+        calc = self._import_calculate_palette_metrics()
+        result = calc({})
+
+        self.assertIsInstance(result, dict)
+        # Empty input should not produce metric keys (no data to compute from)
+        self.assertNotIn('avg_hue', result)
+
+    def test_single_color_valid_metrics(self):
+        """Dict with only color0 should still compute valid metrics.
+
+        Bug caught: logic assumes all 16 colors present, crashes or produces
+        wrong averages with fewer.
+        """
+        calc = self._import_calculate_palette_metrics()
+        result = calc({'color0': '#FF0000'})
+
+        self.assertIn('avg_hue', result)
+        self.assertIn('avg_saturation', result)
+        self.assertIn('avg_lightness', result)
+        self.assertIn('color_temperature', result)
+        # Single red color: hue should be near 0
+        hue = result['avg_hue']
+        self.assertTrue(
+            hue < 5 or hue > 355,
+            f"Single red color avg_hue should be near 0/360, got {hue}"
+        )
+
+    def test_all_achromatic_saturation_near_zero(self):
+        """All-gray palette should have saturation near 0 and hue should not be NaN.
+
+        Bug caught: NaN from achromatic hue (0 saturation makes hue undefined
+        in HSL), or division-by-zero in saturation calculation.
+        """
+        calc = self._import_calculate_palette_metrics()
+        # 16 shades of gray
+        grays = [
+            '#111111', '#222222', '#333333', '#444444',
+            '#555555', '#666666', '#777777', '#888888',
+            '#999999', '#AAAAAA', '#BBBBBB', '#CCCCCC',
+            '#DDDDDD', '#EEEEEE', '#F0F0F0', '#FAFAFA',
+        ]
+        colors = {f'color{i}': grays[i] for i in range(16)}
+        result = calc(colors)
+
+        self.assertIn('avg_saturation', result)
+        self.assertAlmostEqual(
+            result['avg_saturation'], 0.0, places=2,
+            msg=f"All-gray palette saturation should be ~0, got {result['avg_saturation']}"
+        )
+        self.assertIn('avg_hue', result)
+        # Hue must not be NaN
+        self.assertFalse(
+            result['avg_hue'] != result['avg_hue'],
+            "avg_hue must not be NaN for achromatic palette"
+        )
+
+    def test_non_color_keys_ignored(self):
+        """Keys that are not colorN should not affect metric computation.
+
+        Bug caught: function iterating over all dict keys instead of color0-15.
+        """
+        calc = self._import_calculate_palette_metrics()
+        colors = {f'color{i}': '#FF0000' for i in range(16)}
+        colors['background'] = '#000000'
+        colors['foreground'] = '#FFFFFF'
+        colors['cursor'] = '#FFFFFF'
+        colors['some_extra_key'] = 'not_a_color'
+
+        result = calc(colors)
+        # Should succeed and produce metrics from the 16 color keys only
+        self.assertIn('avg_hue', result)
+
+    # --- Parity Test ---
+
+    def test_parity_with_parse_wallust_json(self):
+        """calculate_palette_metrics() produces values within 0.001 of parse_wallust_json().
+
+        Bug caught: refactoring divergence where the extracted function computes
+        different values than the original inline code in parse_wallust_json().
+        This is the most critical test for Phase 0.
+        """
+        calc = self._import_calculate_palette_metrics()
+        from variety.smart_selection.palette import parse_wallust_json
+
+        # Tokyo Night-inspired palette (realistic, varied colors)
+        json_data = {
+            'color0': '#1a1b26',
+            'color1': '#f7768e',
+            'color2': '#9ece6a',
+            'color3': '#e0af68',
+            'color4': '#7aa2f7',
+            'color5': '#bb9af7',
+            'color6': '#7dcfff',
+            'color7': '#c0caf5',
+            'color8': '#414868',
+            'color9': '#f7768e',
+            'color10': '#9ece6a',
+            'color11': '#e0af68',
+            'color12': '#7aa2f7',
+            'color13': '#bb9af7',
+            'color14': '#7dcfff',
+            'color15': '#c0caf5',
+            'background': '#1a1b26',
+            'foreground': '#c0caf5',
+            'cursor': '#c0caf5',
+        }
+
+        # parse_wallust_json computes metrics inline
+        inline_result = parse_wallust_json(json_data)
+
+        # calculate_palette_metrics computes the same metrics standalone
+        # It should accept the same color dict format
+        extracted_result = calc(json_data)
+
+        # All four metrics must match within floating-point tolerance
+        self.assertAlmostEqual(
+            inline_result['avg_hue'],
+            extracted_result['avg_hue'],
+            places=3,
+            msg="avg_hue diverged between parse_wallust_json and calculate_palette_metrics"
+        )
+        self.assertAlmostEqual(
+            inline_result['avg_saturation'],
+            extracted_result['avg_saturation'],
+            places=3,
+            msg="avg_saturation diverged"
+        )
+        self.assertAlmostEqual(
+            inline_result['avg_lightness'],
+            extracted_result['avg_lightness'],
+            places=3,
+            msg="avg_lightness diverged"
+        )
+        self.assertAlmostEqual(
+            inline_result['color_temperature'],
+            extracted_result['color_temperature'],
+            places=3,
+            msg="color_temperature diverged"
+        )
+
+    def test_parity_with_different_palette(self):
+        """Parity test with a second palette to guard against coincidental matches.
+
+        Bug caught: the first parity test could pass by accident if both paths
+        produce the same wrong answer for one specific input.
+        """
+        calc = self._import_calculate_palette_metrics()
+        from variety.smart_selection.palette import parse_wallust_json
+
+        # Warm earthy palette (very different from Tokyo Night)
+        json_data = {
+            'color0': '#3E3F3C',
+            'color1': '#3F4122',
+            'color2': '#4A4743',
+            'color3': '#544638',
+            'color4': '#5B4622',
+            'color5': '#6E7076',
+            'color6': '#8C8E97',
+            'color7': '#D5D6DC',
+            'color8': '#95959A',
+            'color9': '#54572D',
+            'color10': '#635F5A',
+            'color11': '#705E4B',
+            'color12': '#7A5D2D',
+            'color13': '#93969D',
+            'color14': '#BBBDC9',
+            'color15': '#D5D6DC',
+            'background': '#171815',
+            'foreground': '#E7E8EC',
+            'cursor': '#A5A3A3',
+        }
+
+        inline_result = parse_wallust_json(json_data)
+        extracted_result = calc(json_data)
+
+        self.assertAlmostEqual(
+            inline_result['avg_hue'], extracted_result['avg_hue'], places=3
+        )
+        self.assertAlmostEqual(
+            inline_result['avg_saturation'], extracted_result['avg_saturation'], places=3
+        )
+        self.assertAlmostEqual(
+            inline_result['avg_lightness'], extracted_result['avg_lightness'], places=3
+        )
+        self.assertAlmostEqual(
+            inline_result['color_temperature'], extracted_result['color_temperature'], places=3
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

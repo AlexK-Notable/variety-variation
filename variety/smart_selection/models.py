@@ -111,6 +111,123 @@ class PaletteRecord:
     color_temperature: Optional[float] = None
     indexed_at: Optional[int] = None
 
+    def to_dict(self, include_metrics: bool = False) -> Dict[str, str]:
+        """Convert to palette dict with color0-15, background, foreground, cursor.
+
+        Returns a dict containing only the color keys that have non-None values.
+        Internal fields (filepath, indexed_at) are excluded.
+
+        Args:
+            include_metrics: If True, include avg_hue, avg_saturation,
+                            avg_lightness, color_temperature.
+
+        Returns:
+            Dict with non-None color keys and optionally metric keys.
+        """
+        result = {}
+        for i in range(16):
+            value = getattr(self, f'color{i}')
+            if value is not None:
+                result[f'color{i}'] = value
+        for key in ('background', 'foreground', 'cursor'):
+            value = getattr(self, key)
+            if value is not None:
+                result[key] = value
+        if include_metrics:
+            for key in ('avg_hue', 'avg_saturation', 'avg_lightness', 'color_temperature'):
+                value = getattr(self, key)
+                if value is not None:
+                    result[key] = value
+        return result
+
+
+@dataclass
+class ColorThemeRecord:
+    """Represents a terminal/editor color theme for reverse theming.
+
+    Stores the 16 ANSI colors plus background/foreground/cursor from
+    a theme definition (e.g., Zed theme, custom, or imported). Derived
+    metrics enable color-based filtering and matching with image palettes.
+
+    Attributes:
+        theme_id: Unique identifier for the theme (primary key).
+        name: Human-readable theme name.
+        source_type: Origin type ('zed', 'custom', 'imported').
+        source_path: Path to the original theme file, if applicable.
+        appearance: Theme appearance ('dark', 'light').
+        color0-color15: The 16 ANSI colors as hex strings.
+        background: Background color.
+        foreground: Foreground color.
+        cursor: Cursor color.
+        avg_hue: Average hue across palette (0-360, circular mean).
+        avg_saturation: Average saturation (0-1).
+        avg_lightness: Average lightness (0-1).
+        color_temperature: Derived temperature (-1=cool to +1=warm).
+        imported_at: When the theme was imported (Unix timestamp).
+        is_custom: Whether this is a user-customized theme.
+        parent_theme_id: ID of the parent theme if this is a customization.
+    """
+    theme_id: str
+    name: str
+    source_type: str  # 'zed', 'custom', 'imported'
+    source_path: Optional[str] = None
+    appearance: Optional[str] = None  # 'dark', 'light'
+    color0: Optional[str] = None
+    color1: Optional[str] = None
+    color2: Optional[str] = None
+    color3: Optional[str] = None
+    color4: Optional[str] = None
+    color5: Optional[str] = None
+    color6: Optional[str] = None
+    color7: Optional[str] = None
+    color8: Optional[str] = None
+    color9: Optional[str] = None
+    color10: Optional[str] = None
+    color11: Optional[str] = None
+    color12: Optional[str] = None
+    color13: Optional[str] = None
+    color14: Optional[str] = None
+    color15: Optional[str] = None
+    background: Optional[str] = None
+    foreground: Optional[str] = None
+    cursor: Optional[str] = None
+    avg_hue: Optional[float] = None
+    avg_saturation: Optional[float] = None
+    avg_lightness: Optional[float] = None
+    color_temperature: Optional[float] = None
+    imported_at: Optional[int] = None
+    is_custom: bool = False
+    parent_theme_id: Optional[str] = None
+
+    def to_dict(self, include_metrics: bool = False) -> Dict[str, str]:
+        """Convert to palette dict with color0-15, background, foreground, cursor.
+
+        Returns a dict containing only the color keys that have non-None values.
+        Compatible with TemplateProcessor and PaletteRecord.to_dict() protocol.
+
+        Args:
+            include_metrics: If True, include avg_hue, avg_saturation,
+                            avg_lightness, color_temperature.
+
+        Returns:
+            Dict with non-None color keys and optionally metric keys.
+        """
+        result = {}
+        for i in range(16):
+            value = getattr(self, f'color{i}')
+            if value is not None:
+                result[f'color{i}'] = value
+        for key in ('background', 'foreground', 'cursor'):
+            value = getattr(self, key)
+            if value is not None:
+                result[key] = value
+        if include_metrics:
+            for key in ('avg_hue', 'avg_saturation', 'avg_lightness', 'color_temperature'):
+                value = getattr(self, key)
+                if value is not None:
+                    result[key] = value
+        return result
+
 
 @dataclass
 class SelectionConstraints:

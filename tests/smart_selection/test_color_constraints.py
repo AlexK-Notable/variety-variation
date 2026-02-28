@@ -20,6 +20,10 @@ class TestGetSmartColorConstraints(unittest.TestCase):
         """Create mock VarietyWindow with the method under test."""
         self.mock_window = MagicMock()
         self.mock_window.options = MockOptions()
+        # Explicitly set no theme override so tests exercise time-of-day logic
+        # (MagicMock auto-creates _theme_override as truthy, which would
+        # trigger the theme override path added in Phase 4)
+        self.mock_window._theme_override = None
 
         # Bind the actual method to our mock
         from variety.VarietyWindow import VarietyWindow
@@ -156,6 +160,249 @@ class TestGetSmartColorConstraints(unittest.TestCase):
         self.assertIn('avg_saturation', result.target_palette)
         self.assertIn('avg_lightness', result.target_palette)
         self.assertIn('color_temperature', result.target_palette)
+
+
+class TestThemeOverrideConstraints(unittest.TestCase):
+    """Tests for theme override priority in _get_smart_color_constraints.
+
+    Phase 4 of the Reverse Theming Pipeline: when a theme override is active,
+    its palette takes priority over time-of-day adaptation. When inactive or
+    absent, existing behavior is preserved.
+
+    Written against the interface defined in plan phase 4.
+    """
+
+    def setUp(self):
+        """Create mock VarietyWindow with mock theme override."""
+        self.mock_window = MagicMock()
+        self.mock_window.options = MockOptions()
+
+        # Bind the actual method to our mock
+        from variety.VarietyWindow import VarietyWindow
+        self.mock_window._get_smart_color_constraints = (
+            VarietyWindow._get_smart_color_constraints.__get__(
+                self.mock_window, type(self.mock_window)
+            )
+        )
+
+    def _make_theme_override(self, is_active, palette=None):
+        """Create a mock ThemeOverride with controlled state.
+
+        Args:
+            is_active: Whether the theme override is active.
+            palette: Dict to return from get_target_palette_for_selection(),
+                or None to use a sensible default when active.
+
+        Returns:
+            MagicMock configured as ThemeOverride.
+        """
+        override = MagicMock()
+        override.is_active = is_active
+        if is_active and palette is None:
+            palette = {
+                'avg_hue': 280,
+                'avg_saturation': 0.6,
+                'avg_lightness': 0.3,
+                'color_temperature': -0.5,
+                'color0': '#1a1b26',
+                'color1': '#f7768e',
+                'color2': '#9ece6a',
+                'color3': '#e0af68',
+                'color4': '#7aa2f7',
+                'color5': '#bb9af7',
+                'color6': '#7dcfff',
+                'color7': '#c0caf5',
+                'color8': '#414868',
+                'color9': '#f7768e',
+                'color10': '#9ece6a',
+                'color11': '#e0af68',
+                'color12': '#7aa2f7',
+                'color13': '#bb9af7',
+                'color14': '#7dcfff',
+                'color15': '#c0caf5',
+                'background': '#1a1b26',
+                'foreground': '#c0caf5',
+                'cursor': '#c0caf5',
+            }
+        override.get_target_palette_for_selection.return_value = palette
+        return override
+
+    # === Priority Tests ===
+
+    def test_theme_overrides_time_of_day(self):
+        """Active theme's hue takes priority over time-of-day hue.
+
+        Bug caught: theme check not inserted before temperature logic,
+        so time-of-day always wins even when theme is active.
+        """
+        # Set warm temperature (hue=30), but theme has hue=280
+        self.mock_window.options.smart_color_temperature = 'warm'
+        self.mock_window._theme_override = self._make_theme_override(is_active=True)
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.target_palette['avg_hue'], 280,
+            "Theme hue 280 should override warm hue 30 (time-of-day leaked through)"
+        )
+
+    def test_theme_overrides_adaptive_mode(self):
+        """Active theme takes priority over adaptive (time-based) mode.
+
+        Bug caught: adaptive mode's datetime.now() check runs before
+        theme override check, ignoring active theme.
+        """
+        self.mock_window.options.smart_color_temperature = 'adaptive'
+        self.mock_window._theme_override = self._make_theme_override(is_active=True)
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.target_palette['avg_hue'], 280,
+            "Theme should override adaptive mode regardless of time"
+        )
+
+    # === Fallthrough Tests ===
+
+    def test_falls_through_when_inactive(self):
+        """Inactive theme override falls through to time-of-day logic.
+
+        Bug caught: existence of _theme_override attribute (even inactive)
+        prevents fallthrough to warm/cool/neutral logic.
+        """
+        self.mock_window.options.smart_color_temperature = 'warm'
+        self.mock_window._theme_override = self._make_theme_override(
+            is_active=False, palette=None
+        )
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.target_palette['avg_hue'], 30,
+            "Inactive theme should not block warm hue 30 (fallthrough broken)"
+        )
+
+    def test_backward_compat_no_theme_override_attribute(self):
+        """Method works when _theme_override attribute does not exist at all.
+
+        Bug caught: using self._theme_override directly instead of getattr()
+        raises AttributeError on VarietyWindow instances from before Phase 3.
+        """
+        # Use spec=[] to prevent MagicMock from auto-creating attributes
+        self.mock_window = MagicMock(spec=[])
+        self.mock_window.options = MockOptions()
+        self.mock_window.options.smart_color_temperature = 'cool'
+
+        from variety.VarietyWindow import VarietyWindow
+        self.mock_window._get_smart_color_constraints = (
+            VarietyWindow._get_smart_color_constraints.__get__(
+                self.mock_window, type(self.mock_window)
+            )
+        )
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.target_palette['avg_hue'], 200,
+            "Without _theme_override attribute, cool hue 200 should work (backward compat broken)"
+        )
+
+    # === Palette Shape Tests ===
+
+    def test_theme_palette_has_correct_shape(self):
+        """Theme target_palette includes color keys AND metric keys.
+
+        Bug caught: target_palette from theme missing avg_* metrics,
+        which are needed by color_affinity_factor() for similarity calculation.
+        """
+        theme_palette = {
+            'avg_hue': 280,
+            'avg_saturation': 0.6,
+            'avg_lightness': 0.3,
+            'color_temperature': -0.5,
+            'color0': '#1a1b26',
+            'color1': '#f7768e',
+            'color2': '#9ece6a',
+            'color3': '#e0af68',
+            'color4': '#7aa2f7',
+            'color5': '#bb9af7',
+            'color6': '#7dcfff',
+            'color7': '#c0caf5',
+            'color8': '#414868',
+            'color9': '#f7768e',
+            'color10': '#9ece6a',
+            'color11': '#e0af68',
+            'color12': '#7aa2f7',
+            'color13': '#bb9af7',
+            'color14': '#7dcfff',
+            'color15': '#c0caf5',
+            'background': '#1a1b26',
+            'foreground': '#c0caf5',
+            'cursor': '#c0caf5',
+        }
+        self.mock_window._theme_override = self._make_theme_override(
+            is_active=True, palette=theme_palette
+        )
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        palette = result.target_palette
+
+        # Must have metric keys for selection engine
+        self.assertIn('avg_hue', palette)
+        self.assertIn('avg_saturation', palette)
+        self.assertIn('avg_lightness', palette)
+        self.assertIn('color_temperature', palette)
+
+        # Must have color keys for OKLAB similarity in color_affinity_factor()
+        for i in range(16):
+            self.assertIn(f'color{i}', palette, f"Missing color{i} key")
+
+    # === Similarity Threshold Tests ===
+
+    def test_min_color_similarity_set_when_theme_active(self):
+        """min_color_similarity is set to 0.3 when theme override is active.
+
+        Bug caught: theme override uses user's configured similarity (e.g., 0.6)
+        which is too strict for theme matching, excluding most wallpapers.
+        """
+        # User has high similarity configured (60%)
+        self.mock_window.options.smart_color_similarity = 60
+        self.mock_window._theme_override = self._make_theme_override(is_active=True)
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertIsNotNone(result.min_color_similarity)
+        # Theme override should use its own threshold, not user's 0.6
+        self.assertLessEqual(
+            result.min_color_similarity, 0.5,
+            f"Similarity {result.min_color_similarity} too strict for theme matching"
+        )
+
+    def test_user_similarity_preserved_without_theme(self):
+        """User's configured similarity preserved when no theme active.
+
+        Bug caught: theme override logic clobbers user's similarity setting
+        even when no theme is active.
+        """
+        self.mock_window.options.smart_color_similarity = 70
+        self.mock_window._theme_override = self._make_theme_override(
+            is_active=False, palette=None
+        )
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.min_color_similarity, 0.7,
+            "User's similarity setting should be preserved when no theme active"
+        )
 
 
 if __name__ == '__main__':

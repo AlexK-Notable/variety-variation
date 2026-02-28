@@ -483,6 +483,12 @@ class Options:
                 pass
 
             try:
+                theme_id = config["smart_active_theme_id"].strip()
+                self.smart_active_theme_id = theme_id if theme_id else None
+            except Exception:
+                pass
+
+            try:
                 self.copyto_enabled = config["copyto_enabled"].lower() in TRUTH_VALUES
             except Exception:
                 pass
@@ -1040,6 +1046,7 @@ class Options:
         self.smart_night_temperature = 0.4
         self.smart_night_saturation = 0.4
         self.smart_palette_tolerance = 0.3
+        self.smart_active_theme_id = None
 
         self.copyto_enabled = False
         self.copyto_folder = "Default"
@@ -1195,6 +1202,7 @@ class Options:
             config["smart_night_temperature"] = str(self.smart_night_temperature)
             config["smart_night_saturation"] = str(self.smart_night_saturation)
             config["smart_palette_tolerance"] = str(self.smart_palette_tolerance)
+            config["smart_active_theme_id"] = self.smart_active_theme_id or ""
 
             config["copyto_enabled"] = str(self.copyto_enabled)
             config["copyto_folder"] = Util.collapseuser(self.copyto_folder)

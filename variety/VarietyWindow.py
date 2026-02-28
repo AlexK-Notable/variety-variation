@@ -65,6 +65,7 @@ from variety.Util import Util, _, debounce, on_gtk, throttle
 from variety.VarietyOptionParser import parse_options
 from variety.WelcomeDialog import WelcomeDialog
 from variety.smart_selection import SmartSelector, SelectionConfig, ImageIndexer
+from variety.smart_selection.theme_override import ThemeOverride
 from variety.smart_selection.theming import ThemeEngine
 from variety.smart_selection.wallust_config import get_config_manager
 from variety_lib import varietyconfig
@@ -343,6 +344,7 @@ class VarietyWindow(Gtk.Window):
                 new_image_boost=getattr(self.options, 'smart_new_boost', 1.5),
                 enabled=getattr(self.options, 'smart_selection_enabled', True),
                 recency_decay=getattr(self.options, 'smart_decay_type', 'exponential'),
+                active_theme_id=getattr(self.options, 'smart_active_theme_id', None),
             )
 
             # Enable palette extraction if color-aware selection is enabled
@@ -365,6 +367,16 @@ class VarietyWindow(Gtk.Window):
                 db_path, config,
                 enable_palette_extraction=enable_palette_extraction
             )
+
+            # Initialize theme override for reverse theming pipeline
+            self._theme_override = ThemeOverride(self.smart_selector.db)
+            if config.active_theme_id:
+                try:
+                    self._theme_override.activate(config.active_theme_id)
+                    logger.info(lambda: f"Theme override activated: {config.active_theme_id}")
+                except ValueError:
+                    logger.warning(lambda: f"Configured theme {config.active_theme_id} not found, ignoring")
+                    config.active_theme_id = None
 
             # Index all enabled source folders in background
             def _index_all_sources():
@@ -490,7 +502,10 @@ class VarietyWindow(Gtk.Window):
                     logger.debug(lambda: f"Theme Engine: Failed to get palette: {e}")
                 return None
 
-            self.theme_engine = ThemeEngine(get_palette_from_db)
+            self.theme_engine = ThemeEngine(
+                get_palette_from_db,
+                theme_override=getattr(self, '_theme_override', None),
+            )
             template_count = len(self.theme_engine.get_enabled_templates())
             logger.info(lambda: f"Theme Engine initialized with {template_count} templates")
 
@@ -616,6 +631,19 @@ class VarietyWindow(Gtk.Window):
         if not getattr(self.options, 'smart_color_enabled', False):
             logger.debug(lambda: "Color selection disabled in options")
             return None
+
+        # THEME OVERRIDE PRIORITY: If active, use theme palette for selection
+        theme_override = getattr(self, '_theme_override', None)
+        if theme_override and theme_override.is_active:
+            target = theme_override.get_target_palette_for_selection()
+            if target:
+                logger.info(lambda: f"Color selection: using theme override palette "
+                            f"(hue={target.get('avg_hue', '?')}, "
+                            f"sat={target.get('avg_saturation', '?')})")
+                return SelectionConstraints(
+                    target_palette=target,
+                    min_color_similarity=0.3,
+                )
 
         # Get similarity threshold (convert 0-100 to 0-1)
         min_similarity = getattr(self.options, 'smart_color_similarity', 50) / 100.0

@@ -17,6 +17,7 @@ from variety.smart_selection.models import (
     ImageRecord,
     SourceRecord,
     PaletteRecord,
+    ColorThemeRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -198,6 +199,7 @@ class ImageDatabase:
             5: self._migrate_v4_to_v5,
             6: self._migrate_v5_to_v6,
             7: self._migrate_v6_to_v7,
+            8: self._migrate_v7_to_v8,
         }
 
         with self._lock:
@@ -456,6 +458,57 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info("Migration v6→v7: Tag scraping pipeline tables created")
+
+    def _migrate_v7_to_v8(self):
+        """Migrate schema from v7 to v8.
+
+        Adds color_themes table for the reverse theming pipeline.
+        Stores terminal/editor color themes with 16 ANSI colors,
+        background/foreground/cursor, and derived metrics.
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS color_themes (
+                theme_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'custom',
+                source_path TEXT,
+                appearance TEXT,
+                color0 TEXT, color1 TEXT, color2 TEXT, color3 TEXT,
+                color4 TEXT, color5 TEXT, color6 TEXT, color7 TEXT,
+                color8 TEXT, color9 TEXT, color10 TEXT, color11 TEXT,
+                color12 TEXT, color13 TEXT, color14 TEXT, color15 TEXT,
+                background TEXT,
+                foreground TEXT,
+                cursor TEXT,
+                avg_hue REAL,
+                avg_saturation REAL,
+                avg_lightness REAL,
+                color_temperature REAL,
+                imported_at INTEGER,
+                is_custom INTEGER DEFAULT 0,
+                parent_theme_id TEXT
+            )
+        ''')
+        logger.info("Migration v7→v8: Created color_themes table")
+
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_color_themes_source_type '
+            'ON color_themes(source_type)'
+        )
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_color_themes_appearance '
+            'ON color_themes(appearance)'
+        )
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_color_themes_parent '
+            'ON color_themes(parent_theme_id)'
+        )
+        logger.info("Migration v7→v8: Created color_themes indexes")
+
+        self.conn.commit()
+        logger.info("Migration v7→v8: Color themes table created")
 
     def close(self):
         """Close the database connection.
@@ -1202,6 +1255,172 @@ class ImageDatabase:
                 for r in records
             ])
             self.conn.commit()
+
+    # =========================================================================
+    # Color Theme Operations
+    # =========================================================================
+
+    def upsert_color_theme(self, theme: ColorThemeRecord):
+        """Insert or update a color theme record.
+
+        Args:
+            theme: ColorThemeRecord to upsert.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO color_themes (
+                    theme_id, name, source_type, source_path, appearance,
+                    color0, color1, color2, color3, color4, color5, color6, color7,
+                    color8, color9, color10, color11, color12, color13, color14, color15,
+                    background, foreground, cursor,
+                    avg_hue, avg_saturation, avg_lightness, color_temperature,
+                    imported_at, is_custom, parent_theme_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(theme_id) DO UPDATE SET
+                    name = excluded.name,
+                    source_type = excluded.source_type,
+                    source_path = excluded.source_path,
+                    appearance = excluded.appearance,
+                    color0 = excluded.color0, color1 = excluded.color1,
+                    color2 = excluded.color2, color3 = excluded.color3,
+                    color4 = excluded.color4, color5 = excluded.color5,
+                    color6 = excluded.color6, color7 = excluded.color7,
+                    color8 = excluded.color8, color9 = excluded.color9,
+                    color10 = excluded.color10, color11 = excluded.color11,
+                    color12 = excluded.color12, color13 = excluded.color13,
+                    color14 = excluded.color14, color15 = excluded.color15,
+                    background = excluded.background,
+                    foreground = excluded.foreground,
+                    cursor = excluded.cursor,
+                    avg_hue = excluded.avg_hue,
+                    avg_saturation = excluded.avg_saturation,
+                    avg_lightness = excluded.avg_lightness,
+                    color_temperature = excluded.color_temperature,
+                    imported_at = excluded.imported_at,
+                    is_custom = excluded.is_custom,
+                    parent_theme_id = excluded.parent_theme_id
+            ''', (
+                theme.theme_id, theme.name, theme.source_type,
+                theme.source_path, theme.appearance,
+                theme.color0, theme.color1, theme.color2, theme.color3,
+                theme.color4, theme.color5, theme.color6, theme.color7,
+                theme.color8, theme.color9, theme.color10, theme.color11,
+                theme.color12, theme.color13, theme.color14, theme.color15,
+                theme.background, theme.foreground, theme.cursor,
+                theme.avg_hue, theme.avg_saturation, theme.avg_lightness,
+                theme.color_temperature,
+                theme.imported_at, int(theme.is_custom), theme.parent_theme_id,
+            ))
+            self.conn.commit()
+
+    def get_color_theme(self, theme_id: str) -> Optional[ColorThemeRecord]:
+        """Get a color theme record by theme_id.
+
+        Args:
+            theme_id: Unique identifier for the theme.
+
+        Returns:
+            ColorThemeRecord if found, None otherwise.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT * FROM color_themes WHERE theme_id = ?', (theme_id,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_color_theme_record(row)
+
+    def get_all_color_themes(self) -> List[ColorThemeRecord]:
+        """Get all color theme records.
+
+        Returns:
+            List of all ColorThemeRecords, ordered by name.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM color_themes ORDER BY name')
+            return [self._row_to_color_theme_record(row) for row in cursor.fetchall()]
+
+    def delete_color_theme(self, theme_id: str) -> bool:
+        """Delete a color theme record.
+
+        Args:
+            theme_id: Unique identifier for the theme to delete.
+
+        Returns:
+            True if a theme was deleted, False if not found.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'DELETE FROM color_themes WHERE theme_id = ?', (theme_id,)
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def search_color_themes(
+        self,
+        source_type: Optional[str] = None,
+        appearance: Optional[str] = None,
+    ) -> List[ColorThemeRecord]:
+        """Search color themes by source_type and/or appearance.
+
+        Args:
+            source_type: Filter by source type ('zed', 'custom', 'imported').
+            appearance: Filter by appearance ('dark', 'light').
+
+        Returns:
+            List of matching ColorThemeRecords, ordered by name.
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            conditions = []
+            params = []
+            if source_type is not None:
+                conditions.append('source_type = ?')
+                params.append(source_type)
+            if appearance is not None:
+                conditions.append('appearance = ?')
+                params.append(appearance)
+
+            query = 'SELECT * FROM color_themes'
+            if conditions:
+                query += ' WHERE ' + ' AND '.join(conditions)
+            query += ' ORDER BY name'
+
+            cursor.execute(query, params)
+            return [self._row_to_color_theme_record(row) for row in cursor.fetchall()]
+
+    def _row_to_color_theme_record(self, row) -> ColorThemeRecord:
+        """Convert a database row to a ColorThemeRecord."""
+        return ColorThemeRecord(
+            theme_id=row['theme_id'],
+            name=row['name'],
+            source_type=row['source_type'],
+            source_path=row['source_path'],
+            appearance=row['appearance'],
+            color0=row['color0'], color1=row['color1'],
+            color2=row['color2'], color3=row['color3'],
+            color4=row['color4'], color5=row['color5'],
+            color6=row['color6'], color7=row['color7'],
+            color8=row['color8'], color9=row['color9'],
+            color10=row['color10'], color11=row['color11'],
+            color12=row['color12'], color13=row['color13'],
+            color14=row['color14'], color15=row['color15'],
+            background=row['background'],
+            foreground=row['foreground'],
+            cursor=row['cursor'],
+            avg_hue=row['avg_hue'],
+            avg_saturation=row['avg_saturation'],
+            avg_lightness=row['avg_lightness'],
+            color_temperature=row['color_temperature'],
+            imported_at=row['imported_at'],
+            is_custom=bool(row['is_custom']),
+            parent_theme_id=row['parent_theme_id'],
+        )
 
     # =========================================================================
     # Palette Status Operations

@@ -1415,5 +1415,847 @@ class TestMigrationIdempotency(unittest.TestCase):
         db2.close()
 
 
+class TestColorThemeMigration(unittest.TestCase):
+    """Tests for v7 to v8 migration: color_themes table.
+
+    Phase 1 adds a color_themes table with indexes for source_type,
+    appearance, and parent_theme_id. These tests verify the migration
+    creates the correct schema, is idempotent, and preserves existing data.
+
+    Tests are written against the planned interface and will fail with
+    AttributeError or AssertionError until the feature code is implemented.
+    """
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _skip_if_not_v8(self):
+        """Skip test if SCHEMA_VERSION is not yet 8 (Phase 1 pending)."""
+        from variety.smart_selection.database import ImageDatabase
+        if ImageDatabase.SCHEMA_VERSION < 8:
+            raise unittest.SkipTest(
+                "SCHEMA_VERSION < 8 (Phase 1 database changes not yet implemented)"
+            )
+
+    def _create_v7_schema(self):
+        """Create a v7 schema database directly.
+
+        Builds the full schema that ImageDatabase would produce at v7,
+        including all tables from v1 through v7 migrations. Uses
+        schema_info table for version tracking (not PRAGMA user_version).
+        """
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Core tables (v1 base schema)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS images (
+                filepath TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                source_id TEXT,
+                width INTEGER,
+                height INTEGER,
+                aspect_ratio REAL,
+                file_size INTEGER,
+                file_mtime INTEGER,
+                is_favorite INTEGER DEFAULT 0,
+                first_indexed_at INTEGER,
+                last_indexed_at INTEGER,
+                last_shown_at INTEGER,
+                times_shown INTEGER DEFAULT 0,
+                palette_status TEXT DEFAULT 'pending',
+                stale_at INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sources (
+                source_id TEXT PRIMARY KEY,
+                source_type TEXT,
+                last_shown_at INTEGER,
+                times_shown INTEGER DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS palettes (
+                filepath TEXT PRIMARY KEY,
+                color0 TEXT, color1 TEXT, color2 TEXT, color3 TEXT,
+                color4 TEXT, color5 TEXT, color6 TEXT, color7 TEXT,
+                color8 TEXT, color9 TEXT, color10 TEXT, color11 TEXT,
+                color12 TEXT, color13 TEXT, color14 TEXT, color15 TEXT,
+                background TEXT,
+                foreground TEXT,
+                cursor TEXT,
+                avg_hue REAL,
+                avg_saturation REAL,
+                avg_lightness REAL,
+                color_temperature REAL,
+                indexed_at INTEGER,
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+            )
+        ''')
+
+        # Indexes (accumulated through v1-v4)
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_source ON images(source_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_last_shown ON images(last_shown_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_favorite ON images(is_favorite)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_palette_status ON images(palette_status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_stale ON images(stale_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_palettes_lightness ON palettes(avg_lightness)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_palettes_temperature ON palettes(color_temperature)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_palettes_color_filter ON palettes(avg_lightness, color_temperature, avg_saturation)')
+
+        # v6: Metadata tables
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS image_metadata (
+                filepath TEXT PRIMARY KEY,
+                category TEXT,
+                purity TEXT,
+                sfw_rating INTEGER,
+                source_colors TEXT,
+                uploader TEXT,
+                source_url TEXT,
+                views INTEGER,
+                favorites INTEGER,
+                uploaded_at INTEGER,
+                metadata_fetched_at INTEGER,
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tags (
+                tag_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                alias TEXT,
+                category TEXT,
+                purity TEXT,
+                popularity_rank INTEGER,
+                wallpaper_count INTEGER,
+                alias_source TEXT,
+                alias_updated_at INTEGER,
+                scraped_at INTEGER,
+                detail_fetched_at INTEGER,
+                UNIQUE(name)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_popularity ON tags(popularity_rank)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_wallpaper_count ON tags(wallpaper_count DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_alias ON tags(alias)')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS image_tags (
+                filepath TEXT NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (filepath, tag_id),
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_filepath ON image_tags(filepath)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag_id ON image_tags(tag_id)')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filepath TEXT NOT NULL,
+                action TEXT NOT NULL,
+                action_at INTEGER NOT NULL,
+                FOREIGN KEY (filepath) REFERENCES images(filepath) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_actions_filepath ON user_actions(filepath)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_actions_action ON user_actions(action)')
+
+        # v7: Scrape job tables
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS scrape_jobs (
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at INTEGER,
+                completed_at INTEGER,
+                progress_cursor TEXT,
+                items_total INTEGER DEFAULT 0,
+                items_completed INTEGER DEFAULT 0,
+                credits_budget INTEGER,
+                credits_used INTEGER DEFAULT 0,
+                error_message TEXT,
+                metadata TEXT
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_scrape_jobs_status ON scrape_jobs(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_scrape_jobs_type ON scrape_jobs(job_type)')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tag_scrape_status (
+                tag_id INTEGER PRIMARY KEY,
+                list_scraped INTEGER DEFAULT 0,
+                firecrawl_status TEXT,
+                firecrawl_job_id INTEGER,
+                firecrawl_attempted_at INTEGER,
+                api_status TEXT,
+                api_attempted_at INTEGER,
+                last_error TEXT,
+                FOREIGN KEY (tag_id) REFERENCES tags(tag_id) ON DELETE CASCADE,
+                FOREIGN KEY (firecrawl_job_id) REFERENCES scrape_jobs(job_id)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tag_scrape_firecrawl ON tag_scrape_status(firecrawl_status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tag_scrape_api ON tag_scrape_status(api_status)')
+
+        # Schema info
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS schema_info (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        cursor.execute("INSERT INTO schema_info (key, value) VALUES ('version', '7')")
+
+        conn.commit()
+        conn.close()
+
+    def _seed_v7_data(self):
+        """Seed a v7 database with sample data across all tables.
+
+        Returns dict of inserted data for verification after migration.
+        """
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Insert image
+        cursor.execute('''
+            INSERT INTO images (filepath, filename, source_id, width, height,
+                               is_favorite, times_shown, palette_status)
+            VALUES ('/test/wallpaper.jpg', 'wallpaper.jpg', 'wallhaven', 1920, 1080,
+                    1, 5, 'extracted')
+        ''')
+
+        # Insert source
+        cursor.execute('''
+            INSERT INTO sources (source_id, source_type, times_shown)
+            VALUES ('wallhaven', 'wallhaven', 10)
+        ''')
+
+        # Insert palette
+        cursor.execute('''
+            INSERT INTO palettes (filepath, color0, background, foreground,
+                                  avg_hue, avg_lightness)
+            VALUES ('/test/wallpaper.jpg', '#1a1b26', '#1a1b26', '#c0caf5',
+                    230.5, 0.52)
+        ''')
+
+        conn.commit()
+        conn.close()
+
+        return {
+            'image_filepath': '/test/wallpaper.jpg',
+            'source_id': 'wallhaven',
+            'palette_color0': '#1a1b26',
+        }
+
+    def test_fresh_database_has_schema_version_8(self):
+        """Fresh database created by ImageDatabase has SCHEMA_VERSION 8.
+
+        Bug caught: SCHEMA_VERSION not bumped from 7 to 8 in database.py.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        db = ImageDatabase(self.db_path)
+        db.close()
+
+        conn = sqlite3.connect(self.db_path)
+        version = conn.execute(
+            "SELECT value FROM schema_info WHERE key='version'"
+        ).fetchone()[0]
+        conn.close()
+
+        self.assertEqual(version, '8')
+
+    def test_fresh_database_has_color_themes_table(self):
+        """Fresh database has a color_themes table.
+
+        Bug caught: Migration or CREATE TABLE not creating color_themes.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        db = ImageDatabase(self.db_path)
+        db.close()
+
+        conn = sqlite3.connect(self.db_path)
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='color_themes'"
+        ).fetchone()
+        conn.close()
+
+        self.assertIsNotNone(result, "color_themes table not created")
+
+    def test_fresh_database_has_all_color_themes_columns(self):
+        """color_themes table has all required columns from the plan.
+
+        Bug caught: Missing column in CREATE TABLE or migration, breaking
+        CRUD operations that reference the column.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        db = ImageDatabase(self.db_path)
+        db.close()
+
+        conn = sqlite3.connect(self.db_path)
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(color_themes)').fetchall()]
+        conn.close()
+
+        required_columns = [
+            'theme_id', 'name', 'source_type', 'source_path', 'appearance',
+            'background', 'foreground', 'cursor',
+            'avg_hue', 'avg_saturation', 'avg_lightness', 'color_temperature',
+            'imported_at', 'is_custom', 'parent_theme_id',
+        ]
+        # Add color0-15
+        required_columns += [f'color{i}' for i in range(16)]
+
+        missing = [c for c in required_columns if c not in columns]
+        self.assertFalse(
+            missing,
+            f"color_themes table missing columns: {missing}"
+        )
+
+    def test_color_themes_indexes_exist(self):
+        """Indexes exist on source_type, appearance, and parent_theme_id.
+
+        Bug caught: Missing indexes cause slow queries when filtering
+        themes by source or appearance.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        db = ImageDatabase(self.db_path)
+        db.close()
+
+        conn = sqlite3.connect(self.db_path)
+        indexes = [
+            row[1] for row in
+            conn.execute("SELECT * FROM sqlite_master WHERE type='index'").fetchall()
+        ]
+        conn.close()
+
+        # Find indexes that reference color_theme(s) in their name
+        color_theme_indexes = [i for i in indexes if i and 'color_theme' in i.lower()]
+        self.assertGreaterEqual(
+            len(color_theme_indexes), 3,
+            f"Expected >= 3 indexes on color_themes, found: {color_theme_indexes}"
+        )
+
+    def test_v7_to_v8_migration_creates_color_themes(self):
+        """Opening a v7 database migrates it to v8 with color_themes table.
+
+        Bug caught: _migrate_v7_to_v8() not registered in migrations dict,
+        or migration method not creating the table.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        self._create_v7_schema()
+
+        # Opening the v7 database triggers auto-migration
+        db = ImageDatabase(self.db_path)
+
+        # Verify color_themes table exists
+        cursor = db.conn.cursor()
+        result = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='color_themes'"
+        ).fetchone()
+        self.assertIsNotNone(result, "color_themes table not created by migration")
+
+        # Verify version updated to 8
+        version = cursor.execute(
+            "SELECT value FROM schema_info WHERE key='version'"
+        ).fetchone()[0]
+        self.assertEqual(version, '8')
+
+        db.close()
+
+    def test_v7_to_v8_migration_idempotent(self):
+        """Opening a v7 database twice does not fail (idempotent migration).
+
+        Bug caught: CREATE TABLE without IF NOT EXISTS, or
+        non-idempotent column additions causing sqlite3.OperationalError.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+
+        self._create_v7_schema()
+
+        # First open triggers migration
+        db1 = ImageDatabase(self.db_path)
+        db1.close()
+
+        # Second open -- migration already applied, must not fail
+        db2 = ImageDatabase(self.db_path)
+
+        # Verify color_themes still exists and is intact
+        cursor = db2.conn.cursor()
+        result = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='color_themes'"
+        ).fetchone()
+        self.assertIsNotNone(result)
+
+        db2.close()
+
+    def test_v7_to_v8_migration_preserves_existing_data(self):
+        """Existing images, palettes, and sources survive the v7 to v8 migration.
+
+        Bug caught: Migration accidentally drops or truncates existing tables,
+        or uses destructive DDL that loses data.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+
+        self._create_v7_schema()
+        seed_data = self._seed_v7_data()
+
+        # Open database -- triggers v7 to v8 migration
+        db = ImageDatabase(self.db_path)
+
+        # Verify image data survived
+        image = db.get_image(seed_data['image_filepath'])
+        self.assertIsNotNone(image, "Image record lost during migration")
+        self.assertEqual(image.filename, 'wallpaper.jpg')
+        self.assertEqual(image.width, 1920)
+        self.assertTrue(image.is_favorite)
+        self.assertEqual(image.times_shown, 5)
+
+        # Verify palette data survived
+        palette = db.get_palette(seed_data['image_filepath'])
+        self.assertIsNotNone(palette, "Palette record lost during migration")
+        self.assertEqual(palette.color0, seed_data['palette_color0'])
+
+        # Verify source data survived
+        cursor = db.conn.cursor()
+        source = cursor.execute(
+            "SELECT source_type, times_shown FROM sources WHERE source_id = ?",
+            (seed_data['source_id'],)
+        ).fetchone()
+        self.assertIsNotNone(source, "Source record lost during migration")
+        self.assertEqual(source[0], 'wallhaven')
+        self.assertEqual(source[1], 10)
+
+        db.close()
+
+    def test_migrate_v7_to_v8_method_exists(self):
+        """_migrate_v7_to_v8 method exists on ImageDatabase.
+
+        Bug caught: Migration method not defined, breaking the migration chain.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+
+        db = ImageDatabase(self.db_path)
+        self.assertTrue(
+            hasattr(db, '_migrate_v7_to_v8'),
+            "ImageDatabase missing _migrate_v7_to_v8 method"
+        )
+        db.close()
+
+    def test_full_migration_chain_v1_to_v8(self):
+        """Full migration chain from v1 through v8 succeeds.
+
+        Bug caught: Migration chain broken by v8 addition -- earlier
+        migrations might interact badly with the new table/indexes.
+        """
+        self._skip_if_not_v8()
+        from variety.smart_selection.database import ImageDatabase
+        import sqlite3
+
+        # Create a minimal v1 database (using existing pattern)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS images (
+                filepath TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                source_id TEXT,
+                is_favorite BOOLEAN DEFAULT FALSE,
+                rating INTEGER DEFAULT 0,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_shown_at TIMESTAMP,
+                shown_count INTEGER DEFAULT 0
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS palettes (
+                filepath TEXT PRIMARY KEY,
+                color0 TEXT, color1 TEXT, color2 TEXT, color3 TEXT,
+                color4 TEXT, color5 TEXT, color6 TEXT, color7 TEXT,
+                color8 TEXT, color9 TEXT, color10 TEXT, color11 TEXT,
+                color12 TEXT, color13 TEXT, color14 TEXT, color15 TEXT,
+                avg_hue REAL, avg_saturation REAL, avg_lightness REAL,
+                color_temperature REAL,
+                extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (filepath) REFERENCES images(filepath)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sources (
+                source_id TEXT PRIMARY KEY,
+                source_type TEXT,
+                source_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_shown_at TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS schema_info (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        cursor.execute("INSERT INTO schema_info (key, value) VALUES ('version', '1')")
+        conn.commit()
+        conn.close()
+
+        # Full migration v1 -> v8
+        db = ImageDatabase(self.db_path)
+
+        # Verify final state includes color_themes
+        cursor = db.conn.cursor()
+        result = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='color_themes'"
+        ).fetchone()
+        self.assertIsNotNone(result, "color_themes table missing after full chain migration")
+
+        # Verify version is 8
+        version = cursor.execute(
+            "SELECT value FROM schema_info WHERE key='version'"
+        ).fetchone()[0]
+        self.assertEqual(version, '8')
+
+        db.close()
+
+
+class TestColorThemeCRUD(unittest.TestCase):
+    """Tests for color_themes CRUD operations.
+
+    Phase 1 adds upsert_color_theme(), get_color_theme(),
+    get_all_color_themes(), delete_color_theme(), and
+    search_color_themes() to ImageDatabase.
+
+    Tests verify behavioral contracts: roundtrip fidelity, upsert
+    semantics, delete semantics, and search filtering.
+    """
+
+    def setUp(self):
+        """Create a temporary database for each test."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_selection.db')
+
+    def tearDown(self):
+        """Clean up temporary database."""
+        import shutil
+        if hasattr(self, 'db') and self.db:
+            self.db.close()
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _skip_if_crud_not_available(self):
+        """Skip test if color theme CRUD methods are not yet implemented."""
+        from variety.smart_selection.database import ImageDatabase
+        if ImageDatabase.SCHEMA_VERSION < 8:
+            raise unittest.SkipTest(
+                "SCHEMA_VERSION < 8 (Phase 1 database changes not yet implemented)"
+            )
+        try:
+            from variety.smart_selection.models import ColorThemeRecord
+        except ImportError:
+            raise unittest.SkipTest(
+                "ColorThemeRecord not yet defined (Phase 1 model not yet implemented)"
+            )
+
+    def _open_db(self):
+        """Open the database, storing reference for tearDown cleanup."""
+        from variety.smart_selection.database import ImageDatabase
+        self.db = ImageDatabase(self.db_path)
+        return self.db
+
+    def _make_theme(self, **overrides):
+        """Create a ColorThemeRecord with sensible defaults.
+
+        Override any field by passing keyword arguments.
+        """
+        from variety.smart_selection.models import ColorThemeRecord
+        defaults = dict(
+            theme_id='test-theme-1',
+            name='Tokyo Night',
+            source_type='zed',
+            source_path='/themes/tokyo-night.json',
+            appearance='dark',
+            color0='#1a1b26',
+            color1='#f7768e',
+            color2='#9ece6a',
+            color3='#e0af68',
+            color4='#7aa2f7',
+            color5='#bb9af7',
+            color6='#7dcfff',
+            color7='#c0caf5',
+            color8='#414868',
+            color9='#f7768e',
+            color10='#9ece6a',
+            color11='#e0af68',
+            color12='#7aa2f7',
+            color13='#bb9af7',
+            color14='#7dcfff',
+            color15='#c0caf5',
+            background='#1a1b26',
+            foreground='#c0caf5',
+            cursor='#c0caf5',
+            avg_hue=230.5,
+            avg_saturation=0.45,
+            avg_lightness=0.52,
+            color_temperature=-0.15,
+            imported_at=1700000000,
+            is_custom=False,
+            parent_theme_id=None,
+        )
+        defaults.update(overrides)
+        return ColorThemeRecord(**defaults)
+
+    def test_upsert_and_get_roundtrip(self):
+        """upsert_color_theme() stores and get_color_theme() retrieves
+        with all fields correct.
+
+        Bug caught: Field ordering mismatch between INSERT and SELECT,
+        or missing column in SQL statements.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        theme = self._make_theme()
+        db.upsert_color_theme(theme)
+
+        result = db.get_color_theme('test-theme-1')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.theme_id, 'test-theme-1')
+        self.assertEqual(result.name, 'Tokyo Night')
+        self.assertEqual(result.source_type, 'zed')
+        self.assertEqual(result.source_path, '/themes/tokyo-night.json')
+        self.assertEqual(result.appearance, 'dark')
+        self.assertEqual(result.color0, '#1a1b26')
+        self.assertEqual(result.color1, '#f7768e')
+        self.assertEqual(result.color7, '#c0caf5')
+        self.assertEqual(result.color15, '#c0caf5')
+        self.assertEqual(result.background, '#1a1b26')
+        self.assertEqual(result.foreground, '#c0caf5')
+        self.assertEqual(result.cursor, '#c0caf5')
+        self.assertAlmostEqual(result.avg_hue, 230.5, places=1)
+        self.assertAlmostEqual(result.avg_saturation, 0.45, places=2)
+        self.assertAlmostEqual(result.avg_lightness, 0.52, places=2)
+        self.assertAlmostEqual(result.color_temperature, -0.15, places=2)
+        self.assertEqual(result.imported_at, 1700000000)
+        self.assertFalse(result.is_custom)
+        self.assertIsNone(result.parent_theme_id)
+
+    def test_upsert_updates_existing(self):
+        """upsert_color_theme() with an existing theme_id updates the data.
+
+        Bug caught: INSERT without ON CONFLICT/REPLACE causing
+        IntegrityError, or update not actually modifying the row.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        theme_v1 = self._make_theme(name='Version 1', appearance='dark')
+        db.upsert_color_theme(theme_v1)
+
+        theme_v2 = self._make_theme(name='Version 2', appearance='light')
+        db.upsert_color_theme(theme_v2)
+
+        result = db.get_color_theme('test-theme-1')
+        self.assertEqual(result.name, 'Version 2')
+        self.assertEqual(result.appearance, 'light')
+
+    def test_get_nonexistent_returns_none(self):
+        """get_color_theme() with a nonexistent ID returns None.
+
+        Bug caught: Raising an exception instead of returning None,
+        or returning an empty record.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        result = db.get_color_theme('nonexistent-theme-id')
+        self.assertIsNone(result)
+
+    def test_delete_removes_theme(self):
+        """delete_color_theme() removes the theme, subsequent get returns None.
+
+        Bug caught: Delete not committing, or deleting wrong row,
+        or delete method not implemented.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        theme = self._make_theme(theme_id='del-me')
+        db.upsert_color_theme(theme)
+
+        # Confirm it exists
+        self.assertIsNotNone(db.get_color_theme('del-me'))
+
+        # Delete it
+        db.delete_color_theme('del-me')
+
+        # Confirm it is gone
+        self.assertIsNone(db.get_color_theme('del-me'))
+
+    def test_get_all_returns_all_themes(self):
+        """get_all_color_themes() returns all stored themes.
+
+        Bug caught: Query with WHERE clause or LIMIT 1 instead of
+        returning all rows.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        db.upsert_color_theme(self._make_theme(theme_id='t1', name='Theme 1'))
+        db.upsert_color_theme(self._make_theme(theme_id='t2', name='Theme 2'))
+        db.upsert_color_theme(self._make_theme(theme_id='t3', name='Theme 3'))
+
+        results = db.get_all_color_themes()
+        self.assertEqual(len(results), 3)
+
+        # Verify all theme IDs are present
+        ids = {t.theme_id for t in results}
+        self.assertEqual(ids, {'t1', 't2', 't3'})
+
+    def test_search_by_source_type(self):
+        """search_color_themes(source_type='zed') returns only Zed themes.
+
+        Bug caught: Missing WHERE clause, or wrong column in filter,
+        or LIKE instead of exact match.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        db.upsert_color_theme(self._make_theme(
+            theme_id='z1', name='Zed Theme', source_type='zed'))
+        db.upsert_color_theme(self._make_theme(
+            theme_id='c1', name='Custom Theme', source_type='custom'))
+        db.upsert_color_theme(self._make_theme(
+            theme_id='z2', name='Another Zed', source_type='zed'))
+
+        results = db.search_color_themes(source_type='zed')
+        self.assertEqual(len(results), 2)
+        for r in results:
+            self.assertEqual(r.source_type, 'zed')
+
+    def test_search_by_appearance(self):
+        """search_color_themes(appearance='dark') returns only dark themes.
+
+        Bug caught: Appearance filter not implemented or filtering on
+        wrong column.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        db.upsert_color_theme(self._make_theme(
+            theme_id='d1', name='Dark Theme', appearance='dark'))
+        db.upsert_color_theme(self._make_theme(
+            theme_id='l1', name='Light Theme', appearance='light'))
+        db.upsert_color_theme(self._make_theme(
+            theme_id='d2', name='Dark Two', appearance='dark'))
+
+        results = db.search_color_themes(appearance='dark')
+        self.assertEqual(len(results), 2)
+        for r in results:
+            self.assertEqual(r.appearance, 'dark')
+
+    def test_search_with_both_filters(self):
+        """search_color_themes(source_type='zed', appearance='dark') returns
+        the intersection of both filters.
+
+        Bug caught: Filters combined with OR instead of AND, or one
+        filter overriding the other.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        db.upsert_color_theme(self._make_theme(
+            theme_id='zd', source_type='zed', appearance='dark'))
+        db.upsert_color_theme(self._make_theme(
+            theme_id='zl', source_type='zed', appearance='light'))
+        db.upsert_color_theme(self._make_theme(
+            theme_id='cd', source_type='custom', appearance='dark'))
+
+        results = db.search_color_themes(source_type='zed', appearance='dark')
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].theme_id, 'zd')
+
+    def test_search_no_filters_returns_all(self):
+        """search_color_themes() with no filters returns all themes.
+
+        Bug caught: search method requiring at least one filter, or
+        returning empty when no filters specified.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        db.upsert_color_theme(self._make_theme(theme_id='t1'))
+        db.upsert_color_theme(self._make_theme(theme_id='t2'))
+
+        results = db.search_color_themes()
+        self.assertEqual(len(results), 2)
+
+    def test_delete_nonexistent_does_not_error(self):
+        """delete_color_theme() with nonexistent ID does not raise.
+
+        Bug caught: DELETE followed by rowcount check that raises
+        when no rows affected.
+        """
+        self._skip_if_crud_not_available()
+
+        db = self._open_db()
+        # Should not raise any exception
+        db.delete_color_theme('does-not-exist')
+
+    def test_upsert_with_none_optional_fields(self):
+        """upsert_color_theme() works with None for optional fields.
+
+        Bug caught: SQL error when inserting NULL for optional columns,
+        or NOT NULL constraint where None is valid.
+        """
+        self._skip_if_crud_not_available()
+        from variety.smart_selection.models import ColorThemeRecord
+
+        db = self._open_db()
+        theme = ColorThemeRecord(
+            theme_id='minimal',
+            name='Minimal',
+            source_type='custom',
+        )
+        db.upsert_color_theme(theme)
+
+        result = db.get_color_theme('minimal')
+        self.assertIsNotNone(result)
+        self.assertEqual(result.name, 'Minimal')
+        self.assertIsNone(result.color0)
+        self.assertIsNone(result.appearance)
+        self.assertIsNone(result.avg_hue)
+
+
 if __name__ == '__main__':
     unittest.main()

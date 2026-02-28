@@ -97,6 +97,9 @@ class SelectionConfig:
     palette_tolerance: float = 0.2
     time_affinity_weight: float = 4.0  # Strong preference for matching brightness
 
+    # Theme override settings
+    active_theme_id: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to a dictionary.
 

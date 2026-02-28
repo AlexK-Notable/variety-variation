@@ -964,5 +964,219 @@ class TestColorAffinityInCalculateWeight(unittest.TestCase):
         self.assertGreater(w_with_target, w_no_target)
 
 
+class TestColorAffinityWithThemePalette(unittest.TestCase):
+    """Tests for color_affinity_factor with theme-derived palette dicts.
+
+    Phase 4 of the Reverse Theming Pipeline: theme palette dicts (with
+    color0-15 + avg_* metrics) must be accepted by color_affinity_factor()
+    and produce meaningful boost/penalty factors.
+
+    Written against the interface defined in plan phase 4.
+    """
+
+    def _make_theme_palette(self, **overrides):
+        """Create a theme-style palette dict with all expected keys.
+
+        Returns a dict matching ThemeOverride.get_target_palette_for_selection()
+        output: color0-15, background, foreground, cursor, and avg_* metrics.
+        """
+        palette = {
+            'color0': '#1a1b26',
+            'color1': '#f7768e',
+            'color2': '#9ece6a',
+            'color3': '#e0af68',
+            'color4': '#7aa2f7',
+            'color5': '#bb9af7',
+            'color6': '#7dcfff',
+            'color7': '#c0caf5',
+            'color8': '#414868',
+            'color9': '#f7768e',
+            'color10': '#9ece6a',
+            'color11': '#e0af68',
+            'color12': '#7aa2f7',
+            'color13': '#bb9af7',
+            'color14': '#7dcfff',
+            'color15': '#c0caf5',
+            'background': '#1a1b26',
+            'foreground': '#c0caf5',
+            'cursor': '#c0caf5',
+            'avg_hue': 220.0,
+            'avg_saturation': 0.5,
+            'avg_lightness': 0.4,
+            'color_temperature': -0.3,
+        }
+        palette.update(overrides)
+        return palette
+
+    def test_theme_palette_dict_accepted_without_error(self):
+        """Theme palette dict is accepted by color_affinity_factor().
+
+        Bug caught: color_affinity_factor() rejects dict with extra keys
+        (color0-15, background, foreground, cursor) beyond avg_* metrics.
+        """
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        image_palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            color0='#1a1b26', color1='#f7768e', color2='#9ece6a',
+            color3='#e0af68', color4='#7aa2f7', color5='#bb9af7',
+            color6='#7dcfff', color7='#c0caf5', color8='#414868',
+            color9='#f7768e', color10='#9ece6a', color11='#e0af68',
+            color12='#7aa2f7', color13='#bb9af7', color14='#7dcfff',
+            color15='#c0caf5', background='#1a1b26',
+            foreground='#c0caf5', cursor='#c0caf5',
+            avg_hue=220.0, avg_saturation=0.5, avg_lightness=0.4,
+            color_temperature=-0.3,
+        )
+        theme_palette = self._make_theme_palette()
+
+        # Should not raise any exception
+        factor = color_affinity_factor(image_palette, theme_palette, config)
+
+        self.assertIsInstance(factor, float)
+        self.assertGreater(factor, 0)
+
+    def test_similar_palette_gets_boost(self):
+        """Image palette similar to theme palette produces factor > 1.0.
+
+        Bug caught: theme palette dict shape causes similarity calculation
+        to return 0 or raises error, resulting in penalty instead of boost.
+        """
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+
+        # Image palette that closely matches the theme
+        similar_palette = PaletteRecord(
+            filepath='/test/similar.jpg',
+            color0='#1a1b26', color1='#f7768e', color2='#9ece6a',
+            color3='#e0af68', color4='#7aa2f7', color5='#bb9af7',
+            color6='#7dcfff', color7='#c0caf5', color8='#414868',
+            color9='#f7768e', color10='#9ece6a', color11='#e0af68',
+            color12='#7aa2f7', color13='#bb9af7', color14='#7dcfff',
+            color15='#c0caf5', background='#1a1b26',
+            foreground='#c0caf5', cursor='#c0caf5',
+            avg_hue=220.0, avg_saturation=0.5, avg_lightness=0.4,
+            color_temperature=-0.3,
+        )
+        theme_palette = self._make_theme_palette()
+
+        factor = color_affinity_factor(similar_palette, theme_palette, config)
+
+        self.assertGreater(
+            factor, 1.0,
+            f"Similar palette should get boost > 1.0, got {factor}"
+        )
+
+    def test_dissimilar_palette_scores_lower_than_similar(self):
+        """Dissimilar image scores lower than a similar image.
+
+        Bug caught: all images get the same factor regardless of similarity,
+        meaning theme selection has no effect on wallpaper choice.
+
+        Note: In OKLAB perceptual space, even visually different palettes
+        may have >0.5 similarity, so we compare relative factors rather
+        than asserting an absolute <1.0 threshold.
+        """
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        theme_palette = self._make_theme_palette()
+
+        # Similar image (same colors as theme)
+        similar_palette = PaletteRecord(
+            filepath='/test/similar.jpg',
+            color0='#1a1b26', color1='#f7768e', color2='#9ece6a',
+            color3='#e0af68', color4='#7aa2f7', color5='#bb9af7',
+            color6='#7dcfff', color7='#c0caf5', color8='#414868',
+            color9='#f7768e', color10='#9ece6a', color11='#e0af68',
+            color12='#7aa2f7', color13='#bb9af7', color14='#7dcfff',
+            color15='#c0caf5', background='#1a1b26',
+            foreground='#c0caf5', cursor='#c0caf5',
+            avg_hue=220.0, avg_saturation=0.5, avg_lightness=0.4,
+            color_temperature=-0.3,
+        )
+
+        # Dissimilar image (bright warm vs dark cool theme)
+        dissimilar_palette = PaletteRecord(
+            filepath='/test/dissimilar.jpg',
+            color0='#fff8e1', color1='#ff6f00', color2='#ffd54f',
+            color3='#ffab40', color4='#ff8f00', color5='#ffc107',
+            color6='#ffecb3', color7='#fff3e0', color8='#ffe0b2',
+            color9='#ffb74d', color10='#ffa726', color11='#ff9800',
+            color12='#fb8c00', color13='#f57c00', color14='#ef6c00',
+            color15='#e65100', background='#fff8e1',
+            foreground='#3e2723', cursor='#ff6f00',
+            avg_hue=35.0, avg_saturation=0.8, avg_lightness=0.8,
+            color_temperature=0.8,
+        )
+
+        f_similar = color_affinity_factor(similar_palette, theme_palette, config)
+        f_dissimilar = color_affinity_factor(dissimilar_palette, theme_palette, config)
+
+        self.assertGreater(
+            f_similar, f_dissimilar,
+            f"Similar ({f_similar:.3f}) should score higher than "
+            f"dissimilar ({f_dissimilar:.3f}) for theme palette"
+        )
+
+    def test_theme_palette_produces_meaningful_discrimination(self):
+        """Similar and dissimilar images produce different factors.
+
+        Bug caught: color_affinity_factor ignores color0-15 keys in theme
+        palette and only uses avg_* metrics, reducing discrimination power.
+        """
+        from variety.smart_selection.weights import color_affinity_factor
+        from variety.smart_selection.models import PaletteRecord
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(color_match_weight=1.0)
+        theme_palette = self._make_theme_palette()
+
+        # Similar image (dark, cool, similar colors)
+        similar = PaletteRecord(
+            filepath='/test/similar.jpg',
+            color0='#1a1b26', color1='#f7768e', color2='#9ece6a',
+            color3='#e0af68', color4='#7aa2f7', color5='#bb9af7',
+            color6='#7dcfff', color7='#c0caf5', color8='#414868',
+            color9='#f7768e', color10='#9ece6a', color11='#e0af68',
+            color12='#7aa2f7', color13='#bb9af7', color14='#7dcfff',
+            color15='#c0caf5', background='#1a1b26',
+            foreground='#c0caf5', cursor='#c0caf5',
+            avg_hue=220.0, avg_saturation=0.5, avg_lightness=0.4,
+            color_temperature=-0.3,
+        )
+
+        # Dissimilar image (bright, warm, different colors)
+        dissimilar = PaletteRecord(
+            filepath='/test/dissimilar.jpg',
+            color0='#fff8e1', color1='#ff6f00', color2='#ffd54f',
+            color3='#ffab40', color4='#ff8f00', color5='#ffc107',
+            color6='#ffecb3', color7='#fff3e0', color8='#ffe0b2',
+            color9='#ffb74d', color10='#ffa726', color11='#ff9800',
+            color12='#fb8c00', color13='#f57c00', color14='#ef6c00',
+            color15='#e65100', background='#fff8e1',
+            foreground='#3e2723', cursor='#ff6f00',
+            avg_hue=35.0, avg_saturation=0.8, avg_lightness=0.8,
+            color_temperature=0.8,
+        )
+
+        f_similar = color_affinity_factor(similar, theme_palette, config)
+        f_dissimilar = color_affinity_factor(dissimilar, theme_palette, config)
+
+        self.assertGreater(
+            f_similar, f_dissimilar,
+            f"Similar image ({f_similar:.3f}) should score higher than "
+            f"dissimilar image ({f_dissimilar:.3f})"
+        )
+
+
 if __name__ == '__main__':
     unittest.main()
