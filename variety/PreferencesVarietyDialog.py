@@ -3181,6 +3181,13 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.ui.notebook.insert_page(
                 self._theme_browser_page, tab_label, insert_idx
             )
+            # Restore persisted adherence level
+            adherence = getattr(self.parent.options, 'smart_theme_adherence', 'moderate')
+            adherence_idx = {'off': 0, 'loose': 1, 'moderate': 2, 'strict': 3}
+            self._theme_browser_page._adherence_combo.set_active(
+                adherence_idx.get(adherence, 2)
+            )
+
             self._theme_browser_page.show_all()
 
             # Lazy-load themes on first tab switch
@@ -3200,25 +3207,42 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self._theme_browser_loaded = True
             self._theme_browser_page.load_themes()
 
-    def _on_theme_browser_changed(self, theme_id):
+    def _on_theme_browser_changed(self, theme_id, adherence=None):
         """Handle theme activation/deactivation from the Theme Browser.
 
-        Persists the active_theme_id to Options and triggers ThemeEngine
-        to reprocess templates immediately.
+        Persists the active_theme_id and adherence to Options and triggers
+        ThemeEngine to reprocess templates immediately.
 
         Args:
             theme_id: The activated theme ID, or None if cleared.
+            adherence: Adherence level float (0.15/0.30/0.50) or None for off.
         """
-        # Persist to Options so it survives restarts
-        if hasattr(self, 'parent') and self.parent:
-            self.parent.options.smart_active_theme_id = theme_id
-            self.parent.options.write()
+        if not hasattr(self, 'parent') or not self.parent:
+            return
 
-            # Trigger ThemeEngine to reprocess templates
-            if hasattr(self.parent, 'theme_engine') and self.parent.theme_engine:
-                wallpaper = getattr(self.parent, 'current', None)
-                if wallpaper:
-                    self.parent.theme_engine.apply(wallpaper)
+        # Persist theme ID
+        self.parent.options.smart_active_theme_id = theme_id
+
+        # Persist adherence level
+        if adherence is None:
+            adherence_label = 'off'
+        elif adherence <= 0.15:
+            adherence_label = 'loose'
+        elif adherence <= 0.30:
+            adherence_label = 'moderate'
+        else:
+            adherence_label = 'strict'
+        # Only update adherence if a theme is active
+        if theme_id is not None:
+            self.parent.options.smart_theme_adherence = adherence_label
+
+        self.parent.options.write()
+
+        # Trigger ThemeEngine to reprocess templates
+        if hasattr(self.parent, 'theme_engine') and self.parent.theme_engine:
+            wallpaper = getattr(self.parent, 'current', None)
+            if wallpaper:
+                self.parent.theme_engine.apply(wallpaper)
 
     # =========================================================================
     # Wallhaven Manager Tab

@@ -32,27 +32,54 @@ _DEFAULT_PALETTE = {
     'color15': '#a6adc8',
 }
 
-# Mock terminal content: list of lines, each line is a list of (text, color_key) tuples
+# Mock terminal content: list of lines, each line is a list of (text, color_key) tuples.
+# Exercises all 16 ANSI colors + background, foreground, cursor.
 _TERMINAL_LINES = [
-    # Prompt line
-    [('user@host', 'color2'), (':', 'foreground'), ('~/projects', 'color4'),
-     ('$ ', 'foreground'), ('git status', 'color7')],
-    # Git output
-    [('On branch ', 'foreground'), ('main', 'color6')],
-    [('Changes not staged for commit:', 'foreground')],
-    [('  modified:   ', 'color1'), ('src/config.py', 'color1')],
-    [('  modified:   ', 'color1'), ('src/palette.py', 'color1')],
+    # Prompt + ls command
+    [('user', 'color2'), ('@', 'color0'), ('host', 'color2'),
+     (':', 'foreground'), ('~/projects', 'color4'),
+     ('$ ', 'foreground'), ('ls -la', 'color7')],
+    # ls output — directories, files, executables, symlinks
+    [('drwxr-xr-x  ', 'color8'), ('src/', 'color4')],
+    [('-rw-r--r--  ', 'color8'), ('main.py', 'foreground')],
+    [('-rwxr-xr-x  ', 'color8'), ('run.sh', 'color2')],
+    [('lrwxrwxrwx  ', 'color8'), ('config', 'color6'), (' -> ', 'foreground'),
+     ('.config', 'color5')],
     [('')],
-    [('Untracked files:', 'foreground')],
-    [('  new file:   ', 'color2'), ('src/theme.py', 'color2')],
-    [('  new file:   ', 'color2'), ('tests/test_theme.py', 'color2')],
+    # Python code with syntax highlighting
+    [('def ', 'color1'), ('hello', 'color4'), ('(', 'foreground'),
+     ('name', 'color14'), (': ', 'foreground'), ('str', 'color3'),
+     ('):', 'foreground')],
+    [('    ', 'foreground'), ('# greet someone', 'color8')],
+    [('    ', 'foreground'), ('count', 'foreground'), (' = ', 'color9'),
+     ('42', 'color5')],
+    [('    ', 'foreground'), ('print', 'color12'), ('(', 'foreground'),
+     ('f"Hello, ', 'color2'), ('{name}', 'color11'), ('!"', 'color2'),
+     (')', 'foreground')],
+    [('    ', 'foreground'), ('return ', 'color1'),
+     ('True', 'color13')],
     [('')],
-    # Second prompt
-    [('user@host', 'color2'), (':', 'foreground'), ('~/projects', 'color4'),
-     ('$ ', 'foreground'), ('echo "hello world"', 'color3')],
-    [('hello world', 'foreground')],
-    # Third prompt with cursor
-    [('user@host', 'color2'), (':', 'foreground'), ('~/projects', 'color4'),
+    # Color swatch blocks — normal 0-7, then bright 8-15
+    [('\u2588\u2588', 'color0'), (' ', 'background'),
+     ('\u2588\u2588', 'color1'), (' ', 'background'),
+     ('\u2588\u2588', 'color2'), (' ', 'background'),
+     ('\u2588\u2588', 'color3'), (' ', 'background'),
+     ('\u2588\u2588', 'color4'), (' ', 'background'),
+     ('\u2588\u2588', 'color5'), (' ', 'background'),
+     ('\u2588\u2588', 'color6'), (' ', 'background'),
+     ('\u2588\u2588', 'color7')],
+    [('\u2588\u2588', 'color8'), (' ', 'background'),
+     ('\u2588\u2588', 'color9'), (' ', 'background'),
+     ('\u2588\u2588', 'color10'), (' ', 'background'),
+     ('\u2588\u2588', 'color11'), (' ', 'background'),
+     ('\u2588\u2588', 'color12'), (' ', 'background'),
+     ('\u2588\u2588', 'color13'), (' ', 'background'),
+     ('\u2588\u2588', 'color14'), (' ', 'background'),
+     ('\u2588\u2588', 'color15')],
+    [('')],
+    # Final prompt with cursor
+    [('user', 'color10'), ('@', 'color0'), ('host', 'color10'),
+     (':', 'foreground'), ('~/projects', 'color12'),
      ('$ ', 'foreground')],
 ]
 
@@ -87,7 +114,7 @@ class TerminalPreviewWidget(Gtk.DrawingArea):
     def __init__(self):
         super().__init__()
         self._palette = None
-        self.set_size_request(400, 250)
+        self.set_size_request(400, 280)
         self.connect('draw', self._on_draw)
 
     def set_palette(self, palette: Dict[str, str]):

@@ -1156,6 +1156,40 @@ class ImageDatabase:
 
         return [self._row_to_image_record(row) for row in rows]
 
+    def get_all_palettes(self) -> List[PaletteRecord]:
+        """Get all palette records.
+
+        Returns:
+            List of all PaletteRecords in the database (for non-stale images).
+        """
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT p.* FROM palettes p
+                INNER JOIN images i ON p.filepath = i.filepath
+                WHERE i.stale_at IS NULL
+            ''')
+            results = []
+            for row in cursor.fetchall():
+                results.append(PaletteRecord(
+                    filepath=row['filepath'],
+                    color0=row['color0'], color1=row['color1'],
+                    color2=row['color2'], color3=row['color3'],
+                    color4=row['color4'], color5=row['color5'],
+                    color6=row['color6'], color7=row['color7'],
+                    color8=row['color8'], color9=row['color9'],
+                    color10=row['color10'], color11=row['color11'],
+                    color12=row['color12'], color13=row['color13'],
+                    color14=row['color14'], color15=row['color15'],
+                    background=row['background'], foreground=row['foreground'],
+                    cursor=row['cursor'],
+                    avg_hue=row['avg_hue'], avg_saturation=row['avg_saturation'],
+                    avg_lightness=row['avg_lightness'],
+                    color_temperature=row['color_temperature'],
+                    indexed_at=row['indexed_at'],
+                ))
+            return results
+
     def get_palettes_by_filepaths(self, filepaths: List[str]) -> Dict[str, PaletteRecord]:
         """Get multiple palette records by their filepaths.
 
