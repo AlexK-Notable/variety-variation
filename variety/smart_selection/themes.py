@@ -31,17 +31,28 @@ ANSI_MAP = {
 _MIN_ANSI_COLORS = 8
 
 
-def _normalize_hex(color: str) -> str:
+def _normalize_hex(color: str) -> Optional[str]:
     """Normalize a hex color to 6-digit form (#RRGGBB).
 
-    Handles 3-digit shorthand (#RGB -> #RRGGBB) and strips leading #.
-    Returns the color unchanged if already 6-digit or not a valid hex.
+    Handles 3-digit shorthand (#RGB -> #RRGGBB), 8-digit with alpha
+    (#RRGGBBAA -> #RRGGBB), and strips leading #.
+    Returns None for non-hex values (e.g. Zed color expressions).
     """
     if not color or not isinstance(color, str):
-        return color
+        return None
+    if not color.startswith('#'):
+        return None
     c = color.lstrip('#')
+    # Only accept hex digits
+    if not all(ch in '0123456789abcdefABCDEF' for ch in c):
+        return None
     if len(c) == 3:
         c = c[0] * 2 + c[1] * 2 + c[2] * 2
+    elif len(c) == 8:
+        # Strip alpha channel
+        c = c[:6]
+    elif len(c) != 6:
+        return None
     return '#' + c
 
 
@@ -182,7 +193,9 @@ class ZedThemeExtractor:
         for ansi_suffix, color_key in ANSI_MAP.items():
             value = style.get(f'terminal.ansi.{ansi_suffix}')
             if value and isinstance(value, str):
-                colors[color_key] = _normalize_hex(value)
+                normalized = _normalize_hex(value)
+                if normalized:
+                    colors[color_key] = normalized
 
         if len(colors) < _MIN_ANSI_COLORS:
             return None
@@ -190,19 +203,25 @@ class ZedThemeExtractor:
         # Background: prefer terminal.background, fall back to style background
         bg = style.get('terminal.background') or style.get('background')
         if bg and isinstance(bg, str):
-            colors['background'] = _normalize_hex(bg)
+            normalized = _normalize_hex(bg)
+            if normalized:
+                colors['background'] = normalized
 
         # Foreground: prefer terminal.foreground, fall back to editor.foreground
         fg = style.get('terminal.foreground') or style.get('editor.foreground')
         if fg and isinstance(fg, str):
-            colors['foreground'] = _normalize_hex(fg)
+            normalized = _normalize_hex(fg)
+            if normalized:
+                colors['foreground'] = normalized
 
         # Cursor: players[0].cursor, fall back to foreground
         players = style.get('players')
         if isinstance(players, list) and players:
             cursor_val = players[0].get('cursor') if isinstance(players[0], dict) else None
             if cursor_val and isinstance(cursor_val, str):
-                colors['cursor'] = _normalize_hex(cursor_val)
+                normalized = _normalize_hex(cursor_val)
+                if normalized:
+                    colors['cursor'] = normalized
         if 'cursor' not in colors and 'foreground' in colors:
             colors['cursor'] = colors['foreground']
 
@@ -231,6 +250,8 @@ class ZedThemeExtractor:
 
         bg = _normalize_hex(bg)
         fg = _normalize_hex(fg)
+        if not bg or not fg:
+            return None
         colors = {'background': bg, 'foreground': fg}
 
         # Attempt to gather syntax highlight colors
@@ -259,14 +280,18 @@ class ZedThemeExtractor:
             if isinstance(entry, dict):
                 c = entry.get('color')
                 if c and isinstance(c, str):
-                    syntax_colors.append(_normalize_hex(c))
+                    normalized = _normalize_hex(c)
+                    if normalized:
+                        syntax_colors.append(normalized)
 
         # Also try editor-level accent colors
         for accent_key in ('link_text.color', 'conflict', 'created', 'deleted',
                            'error', 'warning', 'info', 'hint', 'success'):
             val = style.get(accent_key)
             if val and isinstance(val, str):
-                syntax_colors.append(_normalize_hex(val))
+                normalized = _normalize_hex(val)
+                if normalized:
+                    syntax_colors.append(normalized)
 
         # Need at least a few colors to build a palette
         if len(syntax_colors) < 4:
