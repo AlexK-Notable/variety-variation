@@ -468,6 +468,13 @@ class ThemeEngine:
     WALLUST_TEMPLATES_DIR = os.path.expanduser('~/.config/wallust/templates')
     VARIETY_CONFIG = os.path.expanduser('~/.config/variety/theming.json')
 
+    # GTK dynamic theme output directory
+    GTK_THEME_DIR = os.path.expanduser('~/.local/share/themes/Variety-Dynamic')
+    GTK_INDEX_THEME = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'data', 'config', 'templates', 'gtk-index.theme'
+    )
+
     # Debounce window in seconds
     DEBOUNCE_INTERVAL = 0.1
 
@@ -748,6 +755,42 @@ class ThemeEngine:
 
         return content
 
+    def _ensure_gtk_theme_scaffold(self) -> None:
+        """Create the Variety-Dynamic theme directory and index.theme if missing.
+
+        Called before writing GTK theme CSS files. Creates:
+        - ~/.local/share/themes/Variety-Dynamic/gtk-3.0/
+        - ~/.local/share/themes/Variety-Dynamic/gtk-4.0/
+        - ~/.local/share/themes/Variety-Dynamic/index.theme
+        """
+        index_path = os.path.join(self.GTK_THEME_DIR, 'index.theme')
+        if os.path.exists(index_path):
+            return
+
+        for subdir in ('gtk-3.0', 'gtk-4.0'):
+            os.makedirs(os.path.join(self.GTK_THEME_DIR, subdir), exist_ok=True)
+
+        # Copy bundled index.theme
+        if os.path.exists(self.GTK_INDEX_THEME):
+            import shutil
+            shutil.copy2(self.GTK_INDEX_THEME, index_path)
+        else:
+            # Fallback: write minimal index.theme inline
+            with open(index_path, 'w') as f:
+                f.write(
+                    "[Desktop Entry]\n"
+                    "Type=X-GNOME-Metatheme\n"
+                    "Name=Variety-Dynamic\n"
+                    "Comment=Dynamically generated theme from wallpaper colors\n"
+                    "Encoding=UTF-8\n\n"
+                    "[X-GNOME-Metatheme]\n"
+                    "GtkTheme=Variety-Dynamic\n"
+                    "MetacityTheme=Adwaita\n"
+                    "IconTheme=hicolor\n"
+                    "CursorTheme=default\n"
+                )
+        logger.info("Created GTK theme scaffold at %s", self.GTK_THEME_DIR)
+
     def _write_atomic(self, path: str, content: str) -> bool:
         """Write content to file atomically using temp file + rename.
 
@@ -1012,6 +1055,9 @@ class ThemeEngine:
 
         # Apply fallbacks for missing colors
         palette = self._apply_palette_fallbacks(palette)
+
+        # Ensure GTK theme directory exists before writing CSS
+        self._ensure_gtk_theme_scaffold()
 
         # Process each enabled template
         processor = TemplateProcessor(palette)
