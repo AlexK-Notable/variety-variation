@@ -218,7 +218,7 @@ class SelectionEngine:
         Returns:
             List of selected file paths.
         """
-        if not candidates:
+        if not candidates or count <= 0:
             return []
 
         k = min(count, len(candidates))

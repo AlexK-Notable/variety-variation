@@ -196,7 +196,7 @@ class ConstraintApplier:
         )
 
         # Check threshold (default 0.7 if not specified)
-        min_similarity = constraints.min_color_similarity or 0.7
+        min_similarity = constraints.min_color_similarity if constraints.min_color_similarity is not None else 0.7
         if similarity < min_similarity:
             return False
 

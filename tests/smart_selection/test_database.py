@@ -1078,8 +1078,8 @@ class TestBatchDeleteImages(unittest.TestCase):
         # Verify palette exists
         self.assertIsNotNone(db.get_palette("/test/image1.jpg"))
 
-        # Delete the image
-        db.batch_delete_images(["/test/image1.jpg"])
+        # Delete the image (hard delete to remove palettes too)
+        db.batch_delete_images(["/test/image1.jpg"], soft_delete=False)
 
         # Palette should also be deleted
         self.assertIsNone(db.get_palette("/test/image1.jpg"))
@@ -1109,8 +1109,8 @@ class TestBatchDeleteImages(unittest.TestCase):
                 )
                 db.upsert_palette(palette)
 
-        # Delete all 3
-        db.batch_delete_images([f"/test/image{i}.jpg" for i in range(3)])
+        # Delete all 3 (hard delete to remove palettes too)
+        db.batch_delete_images([f"/test/image{i}.jpg" for i in range(3)], soft_delete=False)
 
         # All should be gone
         for i in range(3):
