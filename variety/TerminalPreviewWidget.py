@@ -35,29 +35,22 @@ _DEFAULT_PALETTE = {
 # Mock terminal content: list of lines, each line is a list of (text, color_key) tuples.
 # Exercises all 16 ANSI colors + background, foreground, cursor.
 _TERMINAL_LINES = [
-    # Prompt + ls command
-    [('user', 'color2'), ('@', 'color0'), ('host', 'color2'),
-     (':', 'foreground'), ('~/projects', 'color4'),
-     ('$ ', 'foreground'), ('ls -la', 'color7')],
-    # ls output — directories, files, executables, symlinks
-    [('drwxr-xr-x  ', 'color8'), ('src/', 'color4')],
-    [('-rw-r--r--  ', 'color8'), ('main.py', 'foreground')],
-    [('-rwxr-xr-x  ', 'color8'), ('run.sh', 'color2')],
-    [('lrwxrwxrwx  ', 'color8'), ('config', 'color6'), (' -> ', 'foreground'),
-     ('.config', 'color5')],
-    [('')],
-    # Python code with syntax highlighting
-    [('def ', 'color1'), ('hello', 'color4'), ('(', 'foreground'),
-     ('name', 'color14'), (': ', 'foreground'), ('str', 'color3'),
-     ('):', 'foreground')],
-    [('    ', 'foreground'), ('# greet someone', 'color8')],
-    [('    ', 'foreground'), ('count', 'foreground'), (' = ', 'color9'),
-     ('42', 'color5')],
-    [('    ', 'foreground'), ('print', 'color12'), ('(', 'foreground'),
-     ('f"Hello, ', 'color2'), ('{name}', 'color11'), ('!"', 'color2'),
-     (')', 'foreground')],
-    [('    ', 'foreground'), ('return ', 'color1'),
-     ('True', 'color13')],
+    # Prompt + neofetch-style header
+    [('user', 'color2'), ('@', 'color0'), ('archlinux', 'color2'),
+     (':', 'foreground'), ('~', 'color4'),
+     ('$ ', 'foreground'), ('neofetch --off', 'color7')],
+    [('user', 'color4'), ('@', 'color8'), ('archlinux', 'color4')],
+    [('──────────────', 'color8')],
+    [('OS', 'color4'), (': ', 'foreground'), ('Arch Linux x86_64', 'color7')],
+    [('Kernel', 'color4'), (': ', 'foreground'), ('6.19.5-3-cachyos', 'color7')],
+    [('Shell', 'color4'), (': ', 'foreground'), ('zsh 5.9', 'color7')],
+    [('WM', 'color4'), (': ', 'foreground'), ('Hyprland', 'color7')],
+    [('Theme', 'color4'), (': ', 'foreground'), ('Catppuccin-Mocha', 'color5')],
+    [('Terminal', 'color4'), (': ', 'foreground'), ('foot', 'color7')],
+    [('CPU', 'color4'), (': ', 'foreground'), ('AMD Ryzen 9 7950X', 'color7'),
+     (' @ ', 'color8'), ('5.76 GHz', 'color3')],
+    [('Memory', 'color4'), (': ', 'foreground'), ('12.4', 'color2'),
+     ('/', 'color8'), ('62.7 GiB', 'color1'), (' (20%)', 'color8')],
     [('')],
     # Color swatch blocks — normal 0-7, then bright 8-15
     [('\u2588\u2588', 'color0'), (' ', 'background'),
@@ -77,8 +70,133 @@ _TERMINAL_LINES = [
      ('\u2588\u2588', 'color14'), (' ', 'background'),
      ('\u2588\u2588', 'color15')],
     [('')],
+    # Prompt + directory listing
+    [('user', 'color10'), ('@', 'color0'), ('archlinux', 'color10'),
+     (':', 'foreground'), ('~/projects', 'color12'),
+     ('$ ', 'foreground'), ('ls -la', 'color7')],
+    [('drwxr-xr-x  ', 'color8'), ('src/', 'color4')],
+    [('drwxr-xr-x  ', 'color8'), ('tests/', 'color4')],
+    [('-rw-r--r--  ', 'color8'), ('main.py', 'foreground')],
+    [('-rwxr-xr-x  ', 'color8'), ('run.sh', 'color2')],
+    [('lrwxrwxrwx  ', 'color8'), ('config', 'color6'), (' -> ', 'foreground'),
+     ('.config', 'color5')],
+    [('-rw-r--r--  ', 'color8'), ('README.md', 'foreground')],
+    [('-rw-r--r--  ', 'color8'), ('Makefile', 'color3')],
+    [('')],
+    # Prompt + cat a Python script
+    [('user', 'color2'), ('@', 'color0'), ('archlinux', 'color2'),
+     (':', 'foreground'), ('~/projects', 'color4'),
+     ('$ ', 'foreground'), ('cat src/palette.py', 'color7')],
+    [('#!/usr/bin/env python3', 'color8')],
+    [('"""Color palette analysis module."""', 'color2')],
+    [('')],
+    [('import ', 'color1'), ('math', 'color14')],
+    [('import ', 'color1'), ('colorsys', 'color14')],
+    [('from ', 'color1'), ('pathlib ', 'color14'),
+     ('import ', 'color1'), ('Path', 'color3')],
+    [('from ', 'color1'), ('typing ', 'color14'),
+     ('import ', 'color1'), ('Dict', 'color3'), (', ', 'foreground'),
+     ('List', 'color3'), (', ', 'foreground'), ('Tuple', 'color3')],
+    [('')],
+    [('WARM_HUES', 'foreground'), (' = ', 'color9'),
+     ('(', 'foreground'), ('0', 'color5'), (', ', 'foreground'),
+     ('60', 'color5'), (', ', 'foreground'), ('300', 'color5'),
+     (', ', 'foreground'), ('360', 'color5'), (')', 'foreground')],
+    [('COOL_HUES', 'foreground'), (' = ', 'color9'),
+     ('(', 'foreground'), ('150', 'color5'), (', ', 'foreground'),
+     ('270', 'color5'), (')', 'foreground')],
+    [('MAX_COLORS', 'foreground'), (' = ', 'color9'),
+     ('16', 'color5')],
+    [('')],
+    [('')],
+    [('class ', 'color1'), ('PaletteAnalyzer', 'color3'), (':', 'foreground')],
+    [('    ', 'foreground'), ('"""Analyze color palettes."""', 'color2')],
+    [('')],
+    [('    ', 'foreground'), ('def ', 'color1'), ('__init__', 'color13'),
+     ('(', 'foreground'), ('self', 'color9'), (', ', 'foreground'),
+     ('colors', 'color14'), (': ', 'foreground'), ('List', 'color3'),
+     ('[', 'foreground'), ('str', 'color3'), (']', 'foreground'),
+     (')', 'foreground'), (':', 'foreground')],
+    [('        ', 'foreground'), ('self', 'color9'),
+     ('.colors = colors', 'foreground')],
+    [('        ', 'foreground'), ('self', 'color9'),
+     ('._cache: ', 'foreground'), ('Dict', 'color3'),
+     (' = {}', 'foreground')],
+    [('')],
+    [('    ', 'foreground'), ('def ', 'color1'), ('hex_to_hsl', 'color4'),
+     ('(', 'foreground'), ('self', 'color9'), (', ', 'foreground'),
+     ('hex_color', 'color14'), (': ', 'foreground'), ('str', 'color3'),
+     (')', 'foreground'), (':', 'foreground')],
+    [('        ', 'foreground'), ('# Convert hex to HSL values', 'color8')],
+    [('        ', 'foreground'), ('h', 'foreground'), (' = ', 'color9'),
+     ('hex_color', 'foreground'), ('.lstrip(', 'foreground'),
+     ("'#'", 'color2'), (')', 'foreground')],
+    [('        ', 'foreground'), ('r', 'foreground'), (' = ', 'color9'),
+     ('int', 'color12'), ('(h[', 'foreground'), ('0', 'color5'),
+     (':', 'foreground'), ('2', 'color5'), ('], ', 'foreground'),
+     ('16', 'color5'), (') / ', 'foreground'), ('255.0', 'color5')],
+    [('        ', 'foreground'), ('g', 'foreground'), (' = ', 'color9'),
+     ('int', 'color12'), ('(h[', 'foreground'), ('2', 'color5'),
+     (':', 'foreground'), ('4', 'color5'), ('], ', 'foreground'),
+     ('16', 'color5'), (') / ', 'foreground'), ('255.0', 'color5')],
+    [('        ', 'foreground'), ('b', 'foreground'), (' = ', 'color9'),
+     ('int', 'color12'), ('(h[', 'foreground'), ('4', 'color5'),
+     (':', 'foreground'), ('6', 'color5'), ('], ', 'foreground'),
+     ('16', 'color5'), (') / ', 'foreground'), ('255.0', 'color5')],
+    [('        ', 'foreground'), ('return ', 'color1'),
+     ('colorsys', 'foreground'), ('.rgb_to_hls(r, g, b)', 'foreground')],
+    [('')],
+    [('    ', 'foreground'), ('def ', 'color1'), ('temperature', 'color4'),
+     ('(', 'foreground'), ('self', 'color9'), (')', 'foreground'),
+     (' -> ', 'color9'), ('float', 'color3'), (':', 'foreground')],
+    [('        ', 'foreground'), ('"""Calculate palette warmth (-1..1)."""', 'color2')],
+    [('        ', 'foreground'), ('if ', 'color1'), ('not ', 'color1'),
+     ('self', 'color9'), ('.colors:', 'foreground')],
+    [('            ', 'foreground'), ('return ', 'color1'),
+     ('0.0', 'color5')],
+    [('        ', 'foreground'), ('temps', 'foreground'), (' = ', 'color9'),
+     ('[', 'foreground')],
+    [('            ', 'foreground'), ('self', 'color9'),
+     ('._hue_temp(c)', 'foreground')],
+    [('            ', 'foreground'), ('for ', 'color1'),
+     ('c', 'foreground'), (' in ', 'color1'), ('self', 'color9'),
+     ('.colors', 'foreground')],
+    [('        ', 'foreground'), (']', 'foreground')],
+    [('        ', 'foreground'), ('return ', 'color1'),
+     ('sum', 'color12'), ('(temps) / ', 'foreground'),
+     ('len', 'color12'), ('(temps)', 'foreground')],
+    [('')],
+    # Prompt + git status
+    [('user', 'color10'), ('@', 'color0'), ('archlinux', 'color10'),
+     (':', 'foreground'), ('~/projects', 'color12'),
+     ('$ ', 'foreground'), ('git status', 'color7')],
+    [('On branch ', 'foreground'), ('feature/themes', 'color2')],
+    [('Changes staged for commit:', 'foreground')],
+    [('  modified:  ', 'color2'), ('src/palette.py', 'foreground')],
+    [('  new file:  ', 'color2'), ('tests/test_palette.py', 'foreground')],
+    [('Changes not staged:', 'foreground')],
+    [('  modified:  ', 'color1'), ('README.md', 'foreground')],
+    [('Untracked files:', 'foreground')],
+    [('  ', 'foreground'), ('docs/', 'color1')],
+    [('')],
+    # Prompt + compile output
+    [('user', 'color2'), ('@', 'color0'), ('archlinux', 'color2'),
+     (':', 'foreground'), ('~/projects', 'color4'),
+     ('$ ', 'foreground'), ('make test', 'color7')],
+    [('Running ', 'foreground'), ('42', 'color5'), (' tests...', 'foreground')],
+    [('  ', 'foreground'), ('PASS', 'color2'), ('  test_hex_to_hsl', 'foreground')],
+    [('  ', 'foreground'), ('PASS', 'color2'), ('  test_temperature', 'foreground')],
+    [('  ', 'foreground'), ('PASS', 'color2'), ('  test_similarity', 'foreground')],
+    [('  ', 'foreground'), ('FAIL', 'color1'), ('  test_edge_cases', 'foreground'),
+     (' - ', 'color8'), ('AssertionError', 'color9')],
+    [('  ', 'foreground'), ('WARN', 'color3'), ('  test_performance', 'foreground'),
+     (' - ', 'color8'), ('slow (2.4s)', 'color11')],
+    [('Results: ', 'foreground'), ('40 passed', 'color2'),
+     (', ', 'foreground'), ('1 failed', 'color1'),
+     (', ', 'foreground'), ('1 warning', 'color3')],
+    [('')],
     # Final prompt with cursor
-    [('user', 'color10'), ('@', 'color0'), ('host', 'color10'),
+    [('user', 'color10'), ('@', 'color0'), ('archlinux', 'color10'),
      (':', 'foreground'), ('~/projects', 'color12'),
      ('$ ', 'foreground')],
 ]
@@ -114,7 +232,8 @@ class TerminalPreviewWidget(Gtk.DrawingArea):
     def __init__(self):
         super().__init__()
         self._palette = None
-        self.set_size_request(400, 280)
+        self._last_requested_height = 0
+        self.set_size_request(400, -1)  # Natural height from content
         self.connect('draw', self._on_draw)
 
     def set_palette(self, palette: Dict[str, str]):
@@ -171,10 +290,13 @@ class TerminalPreviewWidget(Gtk.DrawingArea):
         _, line_height = sample_layout.get_pixel_size()
         line_height += _LINE_PADDING
 
-        for line_spans in _TERMINAL_LINES:
-            if y + line_height > height - _MARGIN:
-                break
+        # Calculate needed height and request it (for scrolled container)
+        needed_height = _MARGIN * 2 + len(_TERMINAL_LINES) * line_height
+        if needed_height != self._last_requested_height:
+            self._last_requested_height = needed_height
+            self.set_size_request(400, needed_height)
 
+        for line_spans in _TERMINAL_LINES:
             x = _MARGIN
             for span in line_spans:
                 if len(span) == 1:

@@ -183,19 +183,20 @@ class ConstraintApplier:
             # No palette data - exclude when color filtering
             return False
 
-        # Convert palette record to dict for similarity calculation
-        img_palette = {
-            'avg_hue': palette_record.avg_hue,
-            'avg_saturation': palette_record.avg_saturation,
-            'avg_lightness': palette_record.avg_lightness,
-            'color_temperature': palette_record.color_temperature,
-        }
+        # Use HSL metrics for the hard filter. When comparing terminal/editor
+        # themes against photo wallpapers, aggregate metrics (avg hue, saturation,
+        # lightness, temperature) capture the "mood" match we want. OKLAB
+        # individual-color matching doesn't discriminate well here because
+        # theme ANSI colors and wallpaper extracted colors are fundamentally
+        # different — a blue theme and a warm sunset wallpaper can share
+        # several individual color pairs while having completely different moods.
+        img_palette = palette_record.to_dict(include_metrics=True)
+        similarity = palette_similarity(
+            constraints.target_palette, img_palette, use_oklab=False
+        )
 
-        # Calculate similarity
-        similarity = palette_similarity(constraints.target_palette, img_palette)
-
-        # Check threshold (default 0.5 if not specified)
-        min_similarity = constraints.min_color_similarity or 0.5
+        # Check threshold (default 0.7 if not specified)
+        min_similarity = constraints.min_color_similarity or 0.7
         if similarity < min_similarity:
             return False
 

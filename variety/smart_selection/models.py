@@ -229,6 +229,30 @@ class ColorThemeRecord:
         return result
 
 
+# Theme adherence levels: maps user-facing label to min_color_similarity threshold.
+# Used by theme browser UI, VarietyWindow constraint builder, and match counting.
+# None means no color filtering (templates only, all wallpapers eligible).
+#
+# Thresholds are calibrated for HSL metric comparison (palette_similarity_hsl),
+# which produces values in the ~0.50-0.90 range when comparing terminal themes
+# against wallpaper palettes. OKLAB individual-color matching produces compressed
+# values (~0.70-0.95) that don't discriminate mood differences well.
+ADHERENCE_LEVELS = {
+    'off': None,
+    'loose': 0.60,
+    'moderate': 0.70,
+    'strict': 0.80,
+}
+
+# Ordered list for UI combo boxes: (label, threshold)
+ADHERENCE_CHOICES = [
+    ("Off", None),
+    ("Loose", 0.60),
+    ("Moderate", 0.70),
+    ("Strict", 0.80),
+]
+
+
 @dataclass
 class SelectionConstraints:
     """Constraints for filtering images during selection.

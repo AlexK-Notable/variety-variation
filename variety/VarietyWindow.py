@@ -635,13 +635,13 @@ class VarietyWindow(Gtk.Window):
         # THEME OVERRIDE PRIORITY: If active, use theme palette for selection
         theme_override = getattr(self, '_theme_override', None)
         if theme_override and theme_override.is_active:
+            from variety.smart_selection.models import ADHERENCE_LEVELS
             adherence = getattr(self.options, 'smart_theme_adherence', 'moderate')
-            if adherence == 'off':
-                # Templates only, no wallpaper filtering
+            min_sim = ADHERENCE_LEVELS.get(adherence)
+            if min_sim is None:
+                # "off" or unknown — templates only, no wallpaper filtering
                 logger.info(lambda: "Color selection: theme override active but adherence=off")
                 return None
-            adherence_map = {'loose': 0.15, 'moderate': 0.30, 'strict': 0.50}
-            min_sim = adherence_map.get(adherence, 0.30)
             target = theme_override.get_target_palette_for_selection()
             if target:
                 logger.info(lambda: f"Color selection: using theme override palette "

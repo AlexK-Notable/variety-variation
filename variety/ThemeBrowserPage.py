@@ -18,16 +18,9 @@ from gi.repository import Gtk, Gdk, GLib  # isort:skip
 # fmt: on
 
 from variety.TerminalPreviewWidget import TerminalPreviewWidget
+from variety.smart_selection.models import ADHERENCE_CHOICES
 
 logger = logging.getLogger(__name__)
-
-# Adherence levels: label -> min_color_similarity value (or None for off)
-ADHERENCE_LEVELS = [
-    ("Off", None),
-    ("Loose", 0.15),
-    ("Moderate", 0.30),
-    ("Strict", 0.50),
-]
 
 
 class ColorSwatchGrid(Gtk.Grid):
@@ -264,10 +257,13 @@ class ThemeBrowserPage(Gtk.Box):
         # Right pane: Preview + swatches + buttons + controls
         right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
-        # Terminal preview in a frame
+        # Terminal preview in a scrollable frame
         preview_frame = Gtk.Frame()
+        preview_scroll = Gtk.ScrolledWindow()
+        preview_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self._terminal_preview = TerminalPreviewWidget()
-        preview_frame.add(self._terminal_preview)
+        preview_scroll.add(self._terminal_preview)
+        preview_frame.add(preview_scroll)
         right_box.pack_start(preview_frame, True, True, 0)
 
         # Color swatch grid (clickable for editing)
@@ -334,7 +330,7 @@ class ThemeBrowserPage(Gtk.Box):
         adherence_box.pack_start(adherence_label, False, False, 0)
 
         self._adherence_combo = Gtk.ComboBoxText()
-        for label, _ in ADHERENCE_LEVELS:
+        for label, _ in ADHERENCE_CHOICES:
             self._adherence_combo.append_text(label)
         self._adherence_combo.set_active(2)  # Default: Moderate
         self._adherence_combo.connect('changed', self._on_adherence_changed)
@@ -436,8 +432,11 @@ class ThemeBrowserPage(Gtk.Box):
     def _update_preview(self):
         """Update terminal preview and swatches from editing palette."""
         palette = self._editing_palette
-        self._terminal_preview.set_palette(palette)
-        self._swatch_grid.set_palette(palette)
+        # Pass a new dict copy so set_palette always sees a "new" object,
+        # ensuring GTK schedules a full redraw even if the reference is the same.
+        preview_palette = dict(palette) if palette else None
+        self._terminal_preview.set_palette(preview_palette)
+        self._swatch_grid.set_palette(preview_palette)
         if palette:
             self._bg_btn.set_label(f"BG: {palette.get('background', '-')}")
             self._fg_btn.set_label(f"FG: {palette.get('foreground', '-')}")
@@ -593,16 +592,16 @@ class ThemeBrowserPage(Gtk.Box):
     def _get_adherence_value(self) -> Optional[float]:
         """Get current adherence min_color_similarity value."""
         idx = self._adherence_combo.get_active()
-        if idx < 0 or idx >= len(ADHERENCE_LEVELS):
+        if idx < 0 or idx >= len(ADHERENCE_CHOICES):
             return 0.30
-        return ADHERENCE_LEVELS[idx][1]
+        return ADHERENCE_CHOICES[idx][1]
 
     def _get_adherence_label(self) -> str:
         """Get current adherence level label."""
         idx = self._adherence_combo.get_active()
-        if idx < 0 or idx >= len(ADHERENCE_LEVELS):
+        if idx < 0 or idx >= len(ADHERENCE_CHOICES):
             return "moderate"
-        return ADHERENCE_LEVELS[idx][0].lower()
+        return ADHERENCE_CHOICES[idx][0].lower()
 
     def _on_adherence_changed(self, combo):
         """Handle adherence level change."""
@@ -637,22 +636,36 @@ class ThemeBrowserPage(Gtk.Box):
         self._match_label.set_text("Counting...")
 
         db = self._theme_library.db
+        # Snapshot the palette for the background thread
+        palette_snapshot = dict(palette)
 
         def _count():
             try:
-                from variety.smart_selection.palette import palette_similarity
-                # Get all palette records
+                from variety.smart_selection.palette import (
+                    calculate_palette_metrics, palette_similarity
+                )
+                # Compute theme's aggregate HSL metrics from its hex colors.
+                # Use HSL for mood matching — same as the actual selector's
+                # ConstraintApplier._passes_color_constraints.
+                theme_metrics = calculate_palette_metrics(palette_snapshot)
+                if not theme_metrics:
+                    GLib.idle_add(self._set_match_label, -1, 0)
+                    return
+
+                # Get all wallpaper palette records
                 all_palettes = db.get_all_palettes()
                 total = len(all_palettes)
                 matching = 0
                 for p in all_palettes:
-                    img_palette = {
+                    img_metrics = {
                         'avg_hue': p.avg_hue,
                         'avg_saturation': p.avg_saturation,
                         'avg_lightness': p.avg_lightness,
                         'color_temperature': p.color_temperature,
                     }
-                    sim = palette_similarity(palette, img_palette, use_oklab=False)
+                    sim = palette_similarity(
+                        theme_metrics, img_metrics, use_oklab=False
+                    )
                     if sim >= adherence:
                         matching += 1
                 GLib.idle_add(self._set_match_label, matching, total)

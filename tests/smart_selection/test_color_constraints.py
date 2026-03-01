@@ -365,24 +365,27 @@ class TestThemeOverrideConstraints(unittest.TestCase):
 
     # === Similarity Threshold Tests ===
 
-    def test_min_color_similarity_set_when_theme_active(self):
-        """min_color_similarity is set to 0.3 when theme override is active.
+    def test_min_color_similarity_uses_adherence_not_user_setting(self):
+        """Theme override uses adherence-based threshold, not user's general setting.
 
-        Bug caught: theme override uses user's configured similarity (e.g., 0.6)
-        which is too strict for theme matching, excluding most wallpapers.
+        Bug caught: theme override uses user's configured similarity (e.g., 0.5)
+        instead of the theme-specific adherence level.
         """
-        # User has high similarity configured (60%)
-        self.mock_window.options.smart_color_similarity = 60
+        from variety.smart_selection.models import ADHERENCE_LEVELS
+        # User has their own similarity configured (50%)
+        self.mock_window.options.smart_color_similarity = 50
+        # Theme adherence defaults to 'moderate' via getattr fallback
         self.mock_window._theme_override = self._make_theme_override(is_active=True)
 
         result = self.mock_window._get_smart_color_constraints()
 
         self.assertIsNotNone(result)
         self.assertIsNotNone(result.min_color_similarity)
-        # Theme override should use its own threshold, not user's 0.6
-        self.assertLessEqual(
-            result.min_color_similarity, 0.5,
-            f"Similarity {result.min_color_similarity} too strict for theme matching"
+        # Theme override should use adherence threshold, not user's 0.5
+        expected = ADHERENCE_LEVELS['moderate']
+        self.assertEqual(
+            result.min_color_similarity, expected,
+            f"Similarity {result.min_color_similarity} should be adherence 'moderate' ({expected})"
         )
 
     def test_user_similarity_preserved_without_theme(self):

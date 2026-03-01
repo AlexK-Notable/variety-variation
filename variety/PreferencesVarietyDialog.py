@@ -3182,8 +3182,9 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 self._theme_browser_page, tab_label, insert_idx
             )
             # Restore persisted adherence level
+            from variety.smart_selection.models import ADHERENCE_CHOICES
             adherence = getattr(self.parent.options, 'smart_theme_adherence', 'moderate')
-            adherence_idx = {'off': 0, 'loose': 1, 'moderate': 2, 'strict': 3}
+            adherence_idx = {label.lower(): i for i, (label, _) in enumerate(ADHERENCE_CHOICES)}
             self._theme_browser_page._adherence_combo.set_active(
                 adherence_idx.get(adherence, 2)
             )
@@ -3223,15 +3224,13 @@ class PreferencesVarietyDialog(PreferencesDialog):
         # Persist theme ID
         self.parent.options.smart_active_theme_id = theme_id
 
-        # Persist adherence level
-        if adherence is None:
-            adherence_label = 'off'
-        elif adherence <= 0.15:
-            adherence_label = 'loose'
-        elif adherence <= 0.30:
-            adherence_label = 'moderate'
-        else:
-            adherence_label = 'strict'
+        # Persist adherence level — reverse-map float to label
+        from variety.smart_selection.models import ADHERENCE_CHOICES
+        adherence_label = 'off'
+        for label, threshold in ADHERENCE_CHOICES:
+            if threshold == adherence:
+                adherence_label = label.lower()
+                break
         # Only update adherence if a theme is active
         if theme_id is not None:
             self.parent.options.smart_theme_adherence = adherence_label
