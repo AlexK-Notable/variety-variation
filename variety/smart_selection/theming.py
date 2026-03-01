@@ -382,7 +382,7 @@ ALLOWED_TARGET_DIRS = [
 SAFE_RELOAD_EXECUTABLES = {
     "hyprctl", "swaymsg", "i3-msg", "killall", "polybar-msg",
     "pkill", "kill", "systemctl", "dbus-send", "makoctl",
-    "kvantummanager", "dunst", "swaync-client",
+    "kvantummanager", "dunst", "swaync-client", "gsettings",
 }
 
 
@@ -406,6 +406,9 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     # GTK (apps pick up on next window open)
     "gtk3": None,
     "gtk4": None,
+    # GTK dynamic theme (gsettings toggle forces reload)
+    "gtk3-dynamic": "gsettings set org.gnome.desktop.interface gtk-theme Variety-Dynamic",
+    "gtk4-dynamic": "gsettings set org.gnome.desktop.interface gtk-theme Variety-Dynamic",
 
     # Qt theming
     "qt5ct": None,      # Apps pick up on next launch
