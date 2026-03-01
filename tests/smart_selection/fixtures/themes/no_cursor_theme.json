@@ -1,0 +1,33 @@
+{
+  "$schema": "https://zed.dev/schema/themes/v0.1.0.json",
+  "name": "No Cursor Theme",
+  "themes": [
+    {
+      "name": "No Cursor Dark",
+      "appearance": "dark",
+      "style": {
+        "background": "#282a36",
+        "editor.foreground": "#f8f8f2",
+        "terminal.background": "#282a36",
+        "terminal.foreground": "#f8f8f2",
+        "terminal.ansi.black": "#21222c",
+        "terminal.ansi.red": "#ff5555",
+        "terminal.ansi.green": "#50fa7b",
+        "terminal.ansi.yellow": "#f1fa8c",
+        "terminal.ansi.blue": "#bd93f9",
+        "terminal.ansi.magenta": "#ff79c6",
+        "terminal.ansi.cyan": "#8be9fd",
+        "terminal.ansi.white": "#f8f8f2",
+        "terminal.ansi.bright_black": "#6272a4",
+        "terminal.ansi.bright_red": "#ff6e6e",
+        "terminal.ansi.bright_green": "#69ff94",
+        "terminal.ansi.bright_yellow": "#ffffa5",
+        "terminal.ansi.bright_blue": "#d6acff",
+        "terminal.ansi.bright_magenta": "#ff92df",
+        "terminal.ansi.bright_cyan": "#a4ffff",
+        "terminal.ansi.bright_white": "#ffffff",
+        "players": [{}]
+      }
+    }
+  ]
+}

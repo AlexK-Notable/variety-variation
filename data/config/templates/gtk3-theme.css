@@ -1,0 +1,393 @@
+{# GTK3 Dynamic Theme Template for Variety ThemeEngine
+   Target: ~/.local/share/themes/Variety-Dynamic/gtk-3.0/gtk.css
+
+   Color mapping:
+     background              -> base bg (window, dialog)
+     background|lighten(0.05) -> input/list surfaces (theme_base, view_bg)
+     background|lighten(0.08) -> elevated surfaces (headerbar, card, popover)
+     foreground              -> all fg variants
+     color4                  -> accent / selection
+     color1                  -> destructive
+     color2                  -> success
+     color3                  -> warning
+#}
+
+/* ==========================================================================
+   Color Definitions (@define-color)
+   ========================================================================== */
+
+/* -- Background layers -- */
+@define-color theme_bg_color {{background}};
+@define-color window_bg_color {{background}};
+@define-color dialog_bg_color {{background}};
+@define-color theme_base_color {{background | lighten(0.05)}};
+@define-color view_bg_color {{background | lighten(0.05)}};
+@define-color headerbar_bg_color {{background | lighten(0.08)}};
+@define-color card_bg_color {{background | lighten(0.08)}};
+@define-color popover_bg_color {{background | lighten(0.08)}};
+@define-color sidebar_bg_color {{background | lighten(0.03)}};
+
+/* -- Foreground -- */
+@define-color theme_fg_color {{foreground}};
+@define-color theme_text_color {{foreground}};
+@define-color window_fg_color {{foreground}};
+@define-color dialog_fg_color {{foreground}};
+@define-color view_fg_color {{foreground}};
+@define-color headerbar_fg_color {{foreground}};
+@define-color card_fg_color {{foreground}};
+@define-color popover_fg_color {{foreground}};
+@define-color sidebar_fg_color {{foreground}};
+
+/* -- Accent / selection -- */
+@define-color accent_bg_color {{color4}};
+@define-color accent_fg_color {{background}};
+@define-color accent_color {{color4}};
+@define-color theme_selected_bg_color {{color4}};
+@define-color theme_selected_fg_color {{background}};
+
+/* -- Semantic colors -- */
+@define-color destructive_bg_color {{color1}};
+@define-color destructive_fg_color {{background}};
+@define-color success_bg_color {{color2}};
+@define-color success_fg_color {{background}};
+@define-color warning_bg_color {{color3}};
+@define-color warning_fg_color {{background}};
+
+/* -- Interactive state helpers -- */
+@define-color button_bg_color {{background | lighten(0.08)}};
+@define-color button_hover_color {{background | lighten(0.13)}};
+@define-color button_active_color {{background | lighten(0.03)}};
+
+
+/* ==========================================================================
+   Base Inheritance
+   ========================================================================== */
+
+* {
+    color: @theme_fg_color;
+    -gtk-secondary-caret-color: @accent_color;
+    outline-color: alpha(@accent_color, 0.3);
+}
+
+
+/* ==========================================================================
+   Window
+   ========================================================================== */
+
+window {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+
+/* ==========================================================================
+   Header Bar / Title Bar
+   ========================================================================== */
+
+headerbar,
+.titlebar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.12);
+}
+
+headerbar:backdrop,
+.titlebar:backdrop {
+    background-color: @headerbar_bg_color;
+}
+
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+
+button {
+    background-color: @button_bg_color;
+    color: @theme_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 6px;
+    padding: 4px 12px;
+}
+
+button:hover {
+    background-color: @button_hover_color;
+}
+
+button:active {
+    background-color: @button_active_color;
+}
+
+button:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+button:disabled {
+    opacity: 0.45;
+}
+
+button.suggested-action {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: transparent;
+}
+
+button.suggested-action:hover {
+    background-color: shade(@accent_bg_color, 1.1);
+}
+
+button.destructive-action {
+    background-color: @destructive_bg_color;
+    color: @destructive_fg_color;
+    border-color: transparent;
+}
+
+button.destructive-action:hover {
+    background-color: shade(@destructive_bg_color, 1.1);
+}
+
+
+/* ==========================================================================
+   Text Entries
+   ========================================================================== */
+
+entry,
+searchentry {
+    background-color: @theme_base_color;
+    color: @view_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+entry:focus,
+searchentry:focus {
+    border-color: @accent_color;
+    box-shadow: inset 0 0 0 1px @accent_color;
+}
+
+entry:disabled,
+searchentry:disabled {
+    opacity: 0.45;
+}
+
+
+/* ==========================================================================
+   Tree / List / Icon Views
+   ========================================================================== */
+
+treeview.view,
+iconview,
+list,
+listview {
+    background-color: @view_bg_color;
+    color: @view_fg_color;
+}
+
+treeview.view:selected,
+iconview:selected,
+list row:selected,
+listview row:selected {
+    background-color: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+}
+
+treeview.view:hover,
+iconview:hover,
+list row:hover,
+listview row:hover {
+    background-color: alpha(@accent_color, 0.08);
+}
+
+
+/* ==========================================================================
+   Scrollbar
+   ========================================================================== */
+
+scrollbar slider {
+    background-color: alpha(@theme_fg_color, 0.3);
+    border-radius: 9999px;
+    min-width: 6px;
+    min-height: 6px;
+}
+
+scrollbar slider:hover {
+    background-color: alpha(@theme_fg_color, 0.5);
+}
+
+scrollbar trough {
+    background-color: alpha(@theme_fg_color, 0.1);
+}
+
+
+/* ==========================================================================
+   Switch
+   ========================================================================== */
+
+switch {
+    background-color: alpha(@theme_fg_color, 0.2);
+    border-radius: 9999px;
+    border: 1px solid alpha(@theme_fg_color, 0.1);
+}
+
+switch:checked {
+    background-color: @accent_bg_color;
+}
+
+switch slider {
+    background-color: @theme_fg_color;
+    border-radius: 9999px;
+}
+
+
+/* ==========================================================================
+   Check and Radio Buttons
+   ========================================================================== */
+
+checkbutton check:checked,
+radiobutton radio:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: @accent_bg_color;
+}
+
+checkbutton check,
+radiobutton radio {
+    border: 2px solid alpha(@theme_fg_color, 0.4);
+    background-color: transparent;
+}
+
+
+/* ==========================================================================
+   Scale (Slider)
+   ========================================================================== */
+
+scale trough {
+    background-color: alpha(@theme_fg_color, 0.15);
+    border-radius: 9999px;
+}
+
+scale highlight {
+    background-color: @accent_bg_color;
+    border-radius: 9999px;
+}
+
+scale slider {
+    background-color: @theme_fg_color;
+    border-radius: 50%;
+}
+
+
+/* ==========================================================================
+   Progress Bar
+   ========================================================================== */
+
+progressbar trough {
+    background-color: alpha(@theme_fg_color, 0.15);
+    border-radius: 9999px;
+}
+
+progressbar progress {
+    background-color: @accent_bg_color;
+    border-radius: 9999px;
+}
+
+
+/* ==========================================================================
+   Popover / Menu
+   ========================================================================== */
+
+popover > contents {
+    background-color: @popover_bg_color;
+    color: @popover_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+    border-radius: 8px;
+}
+
+menu {
+    background-color: @popover_bg_color;
+    color: @popover_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+    border-radius: 8px;
+    padding: 4px 0;
+}
+
+menuitem {
+    padding: 4px 8px;
+}
+
+menuitem:hover {
+    background-color: alpha(@accent_color, 0.12);
+}
+
+
+/* ==========================================================================
+   Tooltip
+   ========================================================================== */
+
+tooltip {
+    background-color: @theme_fg_color;
+    color: @theme_bg_color;
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+tooltip * {
+    color: @theme_bg_color;
+}
+
+
+/* ==========================================================================
+   Notebook (Tab Bar)
+   ========================================================================== */
+
+notebook > header > tabs > tab {
+    background-color: transparent;
+    color: alpha(@theme_fg_color, 0.55);
+    padding: 4px 12px;
+    border-bottom: 2px solid transparent;
+}
+
+notebook > header > tabs > tab:checked {
+    background-color: @theme_base_color;
+    color: @theme_fg_color;
+    border-bottom-color: @accent_color;
+}
+
+notebook > header > tabs > tab:hover:not(:checked) {
+    background-color: alpha(@theme_fg_color, 0.05);
+    color: alpha(@theme_fg_color, 0.8);
+}
+
+
+/* ==========================================================================
+   Separator
+   ========================================================================== */
+
+separator {
+    background-color: alpha(@theme_fg_color, 0.15);
+    min-width: 1px;
+    min-height: 1px;
+}
+
+
+/* ==========================================================================
+   Sidebar / Places Sidebar
+   ========================================================================== */
+
+placessidebar,
+.sidebar {
+    background-color: @sidebar_bg_color;
+    color: @sidebar_fg_color;
+}
+
+placessidebar row:selected,
+.sidebar row:selected {
+    background-color: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+}
+
+placessidebar row:hover,
+.sidebar row:hover {
+    background-color: alpha(@accent_color, 0.08);
+}

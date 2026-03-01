@@ -382,7 +382,7 @@ ALLOWED_TARGET_DIRS = [
 SAFE_RELOAD_EXECUTABLES = {
     "hyprctl", "swaymsg", "i3-msg", "killall", "polybar-msg",
     "pkill", "kill", "systemctl", "dbus-send", "makoctl",
-    "kvantummanager", "dunst", "swaync-client",
+    "kvantummanager", "dunst", "swaync-client", "gsettings",
 }
 
 
@@ -406,6 +406,9 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     # GTK (apps pick up on next window open)
     "gtk3": None,
     "gtk4": None,
+    # GTK dynamic theme (gsettings toggle forces reload)
+    "gtk3-dynamic": "gsettings set org.gnome.desktop.interface gtk-theme Variety-Dynamic",
+    "gtk4-dynamic": "gsettings set org.gnome.desktop.interface gtk-theme Variety-Dynamic",
 
     # Qt theming
     "qt5ct": None,      # Apps pick up on next launch
@@ -465,6 +468,13 @@ class ThemeEngine:
     WALLUST_TEMPLATES_DIR = os.path.expanduser('~/.config/wallust/templates')
     VARIETY_CONFIG = os.path.expanduser('~/.config/variety/theming.json')
 
+    # GTK dynamic theme output directory
+    GTK_THEME_DIR = os.path.expanduser('~/.local/share/themes/Variety-Dynamic')
+    GTK_INDEX_THEME = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'data', 'config', 'templates', 'gtk-index.theme'
+    )
+
     # Debounce window in seconds
     DEBOUNCE_INTERVAL = 0.1
 
@@ -476,6 +486,7 @@ class ThemeEngine:
         get_palette_callback: Callable[[str], Optional[Dict[str, str]]],
         wallust_config_path: Optional[str] = None,
         variety_config_path: Optional[str] = None,
+        theme_override: Optional[Any] = None,
     ):
         """Initialize the theme engine.
 
@@ -484,10 +495,13 @@ class ThemeEngine:
                                   a palette dict (color0-15, background, foreground, cursor).
             wallust_config_path: Override path to wallust.toml (for testing).
             variety_config_path: Override path to theming.json (for testing).
+            theme_override: Optional ThemeOverride instance. When active,
+                            templates use the theme palette instead of wallust.
         """
         self.get_palette = get_palette_callback
         self.wallust_config_path = wallust_config_path or self.WALLUST_CONFIG
         self.variety_config_path = variety_config_path or self.VARIETY_CONFIG
+        self._theme_override = theme_override
 
         # Template cache: name -> CachedTemplate
         # Thread-safe: Access only through _get_cached_template() and _set_cached_template()
@@ -741,6 +755,42 @@ class ThemeEngine:
 
         return content
 
+    def _ensure_gtk_theme_scaffold(self) -> None:
+        """Create the Variety-Dynamic theme directory and index.theme if missing.
+
+        Called before writing GTK theme CSS files. Creates:
+        - ~/.local/share/themes/Variety-Dynamic/gtk-3.0/
+        - ~/.local/share/themes/Variety-Dynamic/gtk-4.0/
+        - ~/.local/share/themes/Variety-Dynamic/index.theme
+        """
+        index_path = os.path.join(self.GTK_THEME_DIR, 'index.theme')
+        if os.path.exists(index_path):
+            return
+
+        for subdir in ('gtk-3.0', 'gtk-4.0'):
+            os.makedirs(os.path.join(self.GTK_THEME_DIR, subdir), exist_ok=True)
+
+        # Copy bundled index.theme
+        if os.path.exists(self.GTK_INDEX_THEME):
+            import shutil
+            shutil.copy2(self.GTK_INDEX_THEME, index_path)
+        else:
+            # Fallback: write minimal index.theme inline
+            with open(index_path, 'w') as f:
+                f.write(
+                    "[Desktop Entry]\n"
+                    "Type=X-GNOME-Metatheme\n"
+                    "Name=Variety-Dynamic\n"
+                    "Comment=Dynamically generated theme from wallpaper colors\n"
+                    "Encoding=UTF-8\n\n"
+                    "[X-GNOME-Metatheme]\n"
+                    "GtkTheme=Variety-Dynamic\n"
+                    "MetacityTheme=Adwaita\n"
+                    "IconTheme=hicolor\n"
+                    "CursorTheme=default\n"
+                )
+        logger.info("Created GTK theme scaffold at %s", self.GTK_THEME_DIR)
+
     def _write_atomic(self, path: str, content: str) -> bool:
         """Write content to file atomically using temp file + rename.
 
@@ -988,14 +1038,26 @@ class ThemeEngine:
         """
         start_time = time.perf_counter()
 
-        # Get palette
-        palette = self.get_palette(image_path)
+        # Check theme override first
+        palette = None
+        if self._theme_override and self._theme_override.is_active:
+            palette = self._theme_override.get_override_palette()
+            if palette:
+                logger.debug("Using theme override palette")
+
+        # Fall back to normal wallust path
+        if not palette:
+            palette = self.get_palette(image_path)
+
         if not palette:
             logger.warning(f"No palette available for: {image_path}")
             return False
 
         # Apply fallbacks for missing colors
         palette = self._apply_palette_fallbacks(palette)
+
+        # Ensure GTK theme directory exists before writing CSS
+        self._ensure_gtk_theme_scaffold()
 
         # Process each enabled template
         processor = TemplateProcessor(palette)
@@ -1031,6 +1093,62 @@ class ThemeEngine:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(
             f"Applied theme: {success_count}/{len(self._templates)} templates "
+            f"in {elapsed_ms:.1f}ms"
+        )
+
+        return success_count > 0
+
+    def apply_with_palette(self, palette: Dict[str, str]) -> bool:
+        """Apply templates using a provided palette dict (for theme override).
+
+        Bypasses wallust extraction. Applies fallbacks, processes templates,
+        reloads affected applications.
+
+        Args:
+            palette: Dict with color0-15, background, foreground, cursor keys.
+
+        Returns:
+            True if at least one template was processed successfully.
+        """
+        if not self._enabled:
+            logger.debug("Theming engine disabled")
+            return False
+
+        start_time = time.perf_counter()
+
+        # Apply fallbacks for missing colors
+        palette = self._apply_palette_fallbacks(palette)
+
+        # Process each enabled template
+        processor = TemplateProcessor(palette)
+        success_count = 0
+        reload_commands: List[Tuple[str, str]] = []
+
+        for config in self._templates:
+            if not config.enabled:
+                continue
+
+            template_content = self._get_cached_template(config)
+            if template_content is None:
+                continue
+
+            try:
+                output = processor.process(template_content)
+            except Exception as e:
+                logger.error(f"Error processing template {config.name}: {e}")
+                continue
+
+            if self._write_atomic(config.target_path, output):
+                success_count += 1
+                if config.reload_command:
+                    reload_commands.append((config.name, config.reload_command))
+
+        if reload_commands:
+            self._run_reload_commands_async(reload_commands)
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.info(
+            f"Applied theme (palette): {success_count}/{len(self._templates)} templates "
             f"in {elapsed_ms:.1f}ms"
         )
 

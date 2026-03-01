@@ -309,5 +309,115 @@ class TestConfigSerialization(unittest.TestCase):
         self.assertFalse(hasattr(config, 'unknown_field'))
 
 
+class TestActiveThemeIdConfig(unittest.TestCase):
+    """Tests for active_theme_id field on SelectionConfig.
+
+    Phase 3 adds active_theme_id to SelectionConfig so the selection engine
+    knows which theme override is active for persistence and restoration.
+    """
+
+    def test_active_theme_id_defaults_to_none(self):
+        """SelectionConfig() has active_theme_id=None by default.
+
+        Bug caught: Field missing or default set to non-None value.
+        """
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig()
+        self.assertIsNone(config.active_theme_id)
+
+    def test_active_theme_id_field_exists(self):
+        """active_theme_id is a declared field on SelectionConfig."""
+        from variety.smart_selection.config import SelectionConfig
+
+        field_names = {f.name for f in fields(SelectionConfig)}
+        self.assertIn('active_theme_id', field_names)
+
+    def test_active_theme_id_can_be_set(self):
+        """active_theme_id can be set to a string value."""
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(active_theme_id='my-theme-id')
+        self.assertEqual(config.active_theme_id, 'my-theme-id')
+
+    def test_to_dict_includes_active_theme_id(self):
+        """to_dict() includes active_theme_id even when None.
+
+        Bug caught: Field omitted from serialization, lost on save.
+        """
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig()
+        config_dict = config.to_dict()
+        self.assertIn('active_theme_id', config_dict)
+        self.assertIsNone(config_dict['active_theme_id'])
+
+    def test_to_dict_includes_active_theme_id_when_set(self):
+        """to_dict() includes the set value of active_theme_id."""
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(active_theme_id='test-theme')
+        config_dict = config.to_dict()
+        self.assertEqual(config_dict['active_theme_id'], 'test-theme')
+
+    def test_from_dict_restores_active_theme_id(self):
+        """from_dict() round-trip serialization preserves active_theme_id.
+
+        Bug caught: Deserialization drops active_theme_id.
+        """
+        from variety.smart_selection.config import SelectionConfig
+
+        original = SelectionConfig(active_theme_id='round-trip-test')
+        config_dict = original.to_dict()
+        restored = SelectionConfig.from_dict(config_dict)
+
+        self.assertEqual(restored.active_theme_id, 'round-trip-test')
+
+    def test_from_dict_with_missing_active_theme_id(self):
+        """from_dict() defaults active_theme_id to None when key missing.
+
+        Bug caught: Backward compatibility failure when loading configs saved
+        before Phase 3 (without active_theme_id key).
+        """
+        from variety.smart_selection.config import SelectionConfig
+
+        # Simulate config saved before Phase 3 (no active_theme_id key)
+        old_config_dict = {
+            'image_cooldown_days': 7.0,
+            'enabled': True,
+        }
+        config = SelectionConfig.from_dict(old_config_dict)
+
+        self.assertIsNone(config.active_theme_id)
+
+    def test_from_dict_with_none_active_theme_id(self):
+        """from_dict() handles explicit None for active_theme_id."""
+        from variety.smart_selection.config import SelectionConfig
+
+        config_dict = {
+            'active_theme_id': None,
+            'image_cooldown_days': 7.0,
+        }
+        config = SelectionConfig.from_dict(config_dict)
+
+        self.assertIsNone(config.active_theme_id)
+
+    def test_active_theme_id_does_not_break_other_fields(self):
+        """Adding active_theme_id doesn't affect other field defaults.
+
+        Bug caught: Dataclass field ordering issue corrupts other defaults.
+        """
+        from variety.smart_selection.config import SelectionConfig
+
+        config = SelectionConfig(active_theme_id='test')
+
+        # Verify other fields still have correct defaults
+        self.assertEqual(config.image_cooldown_days, 7.0)
+        self.assertEqual(config.source_cooldown_days, 1.0)
+        self.assertEqual(config.favorite_boost, 2.0)
+        self.assertTrue(config.enabled)
+        self.assertTrue(config.time_adaptation_enabled)
+
+
 if __name__ == '__main__':
     unittest.main()

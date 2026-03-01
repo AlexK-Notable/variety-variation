@@ -51,7 +51,8 @@ logger = logging.getLogger("variety")
 
 SLIDESHOW_PAGE_INDEX = 4
 SMART_SELECTION_PAGE_INDEX = 7
-DONATE_PAGE_INDEX = 11
+THEMES_PAGE_INDEX = 8
+DONATE_PAGE_INDEX = 12
 
 # Tooltips for Smart Selection controls
 SMART_SELECTION_TOOLTIPS = {
@@ -173,6 +174,9 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         if not Util.check_variety_slideshow_present():
             self.ui.notebook.remove_page(SLIDESHOW_PAGE_INDEX)
+
+        # Insert Theme Browser tab after Smart Selection
+        self._insert_theme_browser_tab()
 
         profile_suffix = (
             "" if is_default_profile() else _(" (Profile: {})").format(get_profile_short_name())
@@ -3133,6 +3137,111 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         self._preview_refresh_timer = threading.Timer(0.5, _do_refresh)
         self._preview_refresh_timer.start()
+
+    # =========================================================================
+    # Theme Browser Tab
+    # =========================================================================
+
+    def _insert_theme_browser_tab(self):
+        """Insert the Theme Browser tab into the notebook after Smart Selection.
+
+        Creates a ThemeBrowserPage and inserts it programmatically.
+        The tab index depends on whether the Slideshow page was removed.
+        """
+        try:
+            from variety.ThemeBrowserPage import ThemeBrowserPage
+
+            # Determine insertion index: after Smart Selection
+            # If slideshow was removed, all pages after index 4 shifted down by 1
+            slideshow_present = Util.check_variety_slideshow_present()
+            if slideshow_present:
+                insert_idx = SMART_SELECTION_PAGE_INDEX + 1
+            else:
+                insert_idx = SMART_SELECTION_PAGE_INDEX
+
+            # Get backend objects if available
+            theme_library = None
+            theme_override = None
+            config = None
+            if hasattr(self.parent, 'smart_selector') and self.parent.smart_selector:
+                from variety.smart_selection.themes import ThemeLibrary
+                theme_library = ThemeLibrary(self.parent.smart_selector.db)
+                config = self.parent.smart_selector.config
+            if hasattr(self.parent, '_theme_override'):
+                theme_override = self.parent._theme_override
+
+            self._theme_browser_page = ThemeBrowserPage(
+                theme_library=theme_library,
+                theme_override=theme_override,
+                config=config,
+                on_theme_changed=self._on_theme_browser_changed,
+            )
+
+            tab_label = Gtk.Label(label="Theme Browser")
+            self.ui.notebook.insert_page(
+                self._theme_browser_page, tab_label, insert_idx
+            )
+            # Restore persisted adherence level
+            from variety.smart_selection.models import ADHERENCE_CHOICES
+            adherence = getattr(self.parent.options, 'smart_theme_adherence', 'moderate')
+            adherence_idx = {label.lower(): i for i, (label, _) in enumerate(ADHERENCE_CHOICES)}
+            self._theme_browser_page._adherence_combo.set_active(
+                adherence_idx.get(adherence, 2)
+            )
+
+            self._theme_browser_page.show_all()
+
+            # Lazy-load themes on first tab switch
+            self._theme_browser_loaded = False
+            self.ui.notebook.connect('switch-page', self._on_notebook_switch_page)
+
+        except Exception:
+            logger.exception("Failed to insert Theme Browser tab")
+
+    def _on_notebook_switch_page(self, notebook, page, page_num):
+        """Handle notebook page switches for lazy theme loading."""
+        if (
+            not self._theme_browser_loaded
+            and hasattr(self, '_theme_browser_page')
+            and page == self._theme_browser_page
+        ):
+            self._theme_browser_loaded = True
+            self._theme_browser_page.load_themes()
+
+    def _on_theme_browser_changed(self, theme_id, adherence=None):
+        """Handle theme activation/deactivation from the Theme Browser.
+
+        Persists the active_theme_id and adherence to Options and triggers
+        ThemeEngine to reprocess templates immediately.
+
+        Args:
+            theme_id: The activated theme ID, or None if cleared.
+            adherence: Adherence level float (0.15/0.30/0.50) or None for off.
+        """
+        if not hasattr(self, 'parent') or not self.parent:
+            return
+
+        # Persist theme ID
+        self.parent.options.smart_active_theme_id = theme_id
+
+        # Persist adherence level — reverse-map float to label
+        from variety.smart_selection.models import ADHERENCE_CHOICES
+        adherence_label = 'off'
+        for label, threshold in ADHERENCE_CHOICES:
+            if threshold == adherence:
+                adherence_label = label.lower()
+                break
+        # Only update adherence if a theme is active
+        if theme_id is not None:
+            self.parent.options.smart_theme_adherence = adherence_label
+
+        self.parent.options.write()
+
+        # Trigger ThemeEngine to reprocess templates
+        if hasattr(self.parent, 'theme_engine') and self.parent.theme_engine:
+            wallpaper = getattr(self.parent, 'current', None)
+            if wallpaper:
+                self.parent.theme_engine.apply(wallpaper)
 
     # =========================================================================
     # Wallhaven Manager Tab

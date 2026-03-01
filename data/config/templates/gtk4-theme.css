@@ -1,0 +1,514 @@
+{# GTK4 Dynamic Theme Template for Variety ThemeEngine
+   Target: ~/.local/share/themes/Variety-Dynamic/gtk-4.0/gtk.css
+
+   Color mapping:
+     background              -> base bg (window, dialog)
+     background|lighten(0.05) -> input/list surfaces (theme_base, view_bg)
+     background|lighten(0.08) -> elevated surfaces (headerbar, card, popover)
+     foreground              -> all fg variants
+     color4                  -> accent / selection
+     color1                  -> destructive
+     color2                  -> success
+     color3                  -> warning
+
+   GTK4 differences from GTK3:
+     - :root { } CSS custom properties for libadwaita apps
+     - @define-color retained for backward compat with non-libadwaita apps
+     - Widget selectors: listview/columnview (not treeview.view)
+     - Sidebar selectors: placessidebar, stacksidebar (not .sidebar)
+     - button.flat variant explicitly styled
+     - transition properties for smooth state changes
+#}
+
+/* ==========================================================================
+   CSS Custom Properties (libadwaita / CSS-var-aware apps)
+   ========================================================================== */
+
+:root {
+    --window-bg-color: {{background}};
+    --window-fg-color: {{foreground}};
+    --view-bg-color: {{background | lighten(0.05)}};
+    --view-fg-color: {{foreground}};
+    --headerbar-bg-color: {{background | lighten(0.08)}};
+    --headerbar-fg-color: {{foreground}};
+    --card-bg-color: {{background | lighten(0.08)}};
+    --card-fg-color: {{foreground}};
+    --dialog-bg-color: {{background}};
+    --dialog-fg-color: {{foreground}};
+    --popover-bg-color: {{background | lighten(0.08)}};
+    --popover-fg-color: {{foreground}};
+    --sidebar-bg-color: {{background | lighten(0.03)}};
+    --sidebar-fg-color: {{foreground}};
+    --accent-bg-color: {{color4}};
+    --accent-fg-color: {{background}};
+    --accent-color: {{color4}};
+    --destructive-bg-color: {{color1}};
+    --destructive-fg-color: {{background}};
+    --success-bg-color: {{color2}};
+    --success-fg-color: {{background}};
+    --warning-bg-color: {{color3}};
+    --warning-fg-color: {{background}};
+}
+
+
+/* ==========================================================================
+   Color Definitions (@define-color) — backward compat for non-libadwaita apps
+   ========================================================================== */
+
+/* -- Background layers -- */
+@define-color theme_bg_color {{background}};
+@define-color window_bg_color {{background}};
+@define-color dialog_bg_color {{background}};
+@define-color theme_base_color {{background | lighten(0.05)}};
+@define-color view_bg_color {{background | lighten(0.05)}};
+@define-color headerbar_bg_color {{background | lighten(0.08)}};
+@define-color card_bg_color {{background | lighten(0.08)}};
+@define-color popover_bg_color {{background | lighten(0.08)}};
+@define-color sidebar_bg_color {{background | lighten(0.03)}};
+
+/* -- Foreground -- */
+@define-color theme_fg_color {{foreground}};
+@define-color theme_text_color {{foreground}};
+@define-color window_fg_color {{foreground}};
+@define-color dialog_fg_color {{foreground}};
+@define-color view_fg_color {{foreground}};
+@define-color headerbar_fg_color {{foreground}};
+@define-color card_fg_color {{foreground}};
+@define-color popover_fg_color {{foreground}};
+@define-color sidebar_fg_color {{foreground}};
+
+/* -- Accent / selection -- */
+@define-color accent_bg_color {{color4}};
+@define-color accent_fg_color {{background}};
+@define-color accent_color {{color4}};
+@define-color theme_selected_bg_color {{color4}};
+@define-color theme_selected_fg_color {{background}};
+
+/* -- Semantic colors -- */
+@define-color destructive_bg_color {{color1}};
+@define-color destructive_fg_color {{background}};
+@define-color success_bg_color {{color2}};
+@define-color success_fg_color {{background}};
+@define-color warning_bg_color {{color3}};
+@define-color warning_fg_color {{background}};
+
+/* -- Interactive state helpers -- */
+@define-color button_bg_color {{background | lighten(0.08)}};
+@define-color button_hover_color {{background | lighten(0.13)}};
+@define-color button_active_color {{background | lighten(0.03)}};
+
+
+/* ==========================================================================
+   Base Inheritance
+   ========================================================================== */
+
+* {
+    color: @theme_fg_color;
+    -gtk-secondary-caret-color: @accent_color;
+    outline-color: alpha(@accent_color, 0.3);
+}
+
+
+/* ==========================================================================
+   Window
+   ========================================================================== */
+
+window {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+
+/* ==========================================================================
+   Header Bar / Title Bar
+   ========================================================================== */
+
+headerbar,
+.titlebar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.12);
+    transition: background-color 150ms ease-in-out;
+}
+
+headerbar:backdrop,
+.titlebar:backdrop {
+    background-color: @headerbar_bg_color;
+}
+
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
+
+button {
+    background-color: @button_bg_color;
+    color: @theme_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 6px;
+    padding: 4px 12px;
+    transition: background-color 100ms ease-in-out,
+                border-color 100ms ease-in-out;
+}
+
+button:hover {
+    background-color: @button_hover_color;
+}
+
+button:active {
+    background-color: @button_active_color;
+}
+
+button:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+button:disabled {
+    opacity: 0.45;
+}
+
+/* Flat button variant (GTK4) */
+button.flat {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+button.flat:hover {
+    background-color: alpha(@theme_fg_color, 0.08);
+}
+
+button.flat:active {
+    background-color: alpha(@theme_fg_color, 0.14);
+}
+
+button.suggested-action {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: transparent;
+}
+
+button.suggested-action:hover {
+    background-color: shade(@accent_bg_color, 1.1);
+}
+
+button.destructive-action {
+    background-color: @destructive_bg_color;
+    color: @destructive_fg_color;
+    border-color: transparent;
+}
+
+button.destructive-action:hover {
+    background-color: shade(@destructive_bg_color, 1.1);
+}
+
+
+/* ==========================================================================
+   Text Entries
+   ========================================================================== */
+
+entry,
+searchentry,
+text {
+    background-color: @theme_base_color;
+    color: @view_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 6px;
+    padding: 4px 8px;
+    transition: border-color 100ms ease-in-out,
+                box-shadow 100ms ease-in-out;
+}
+
+entry:focus,
+searchentry:focus,
+text:focus {
+    border-color: @accent_color;
+    box-shadow: inset 0 0 0 1px @accent_color;
+}
+
+entry:disabled,
+searchentry:disabled,
+text:disabled {
+    opacity: 0.45;
+}
+
+
+/* ==========================================================================
+   List / Column / Icon Views (GTK4 selectors)
+   ========================================================================== */
+
+listview,
+columnview,
+list,
+iconview {
+    background-color: @view_bg_color;
+    color: @view_fg_color;
+}
+
+listview > row:selected,
+columnview > row:selected,
+list > row:selected,
+iconview > child:selected {
+    background-color: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+}
+
+listview > row:hover,
+columnview > row:hover,
+list > row:hover,
+iconview > child:hover {
+    background-color: alpha(@accent_color, 0.08);
+}
+
+listview > row,
+columnview > row {
+    transition: background-color 100ms ease-in-out;
+}
+
+
+/* ==========================================================================
+   Scrollbar
+   ========================================================================== */
+
+scrollbar > range > trough > slider {
+    background-color: alpha(@theme_fg_color, 0.3);
+    border-radius: 9999px;
+    min-width: 6px;
+    min-height: 6px;
+    transition: background-color 100ms ease-in-out;
+}
+
+scrollbar > range > trough > slider:hover {
+    background-color: alpha(@theme_fg_color, 0.5);
+}
+
+scrollbar > range > trough {
+    background-color: alpha(@theme_fg_color, 0.1);
+}
+
+
+/* ==========================================================================
+   Switch
+   ========================================================================== */
+
+switch {
+    background-color: alpha(@theme_fg_color, 0.2);
+    border-radius: 9999px;
+    border: 1px solid alpha(@theme_fg_color, 0.1);
+    transition: background-color 200ms ease-in-out;
+}
+
+switch:checked {
+    background-color: @accent_bg_color;
+}
+
+switch > image {
+    background-color: @theme_fg_color;
+    border-radius: 9999px;
+}
+
+
+/* ==========================================================================
+   Check and Radio Buttons
+   ========================================================================== */
+
+checkbutton indicator:checked,
+check:checked,
+radio:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-color: @accent_bg_color;
+}
+
+checkbutton indicator,
+check,
+radio {
+    border: 2px solid alpha(@theme_fg_color, 0.4);
+    background-color: transparent;
+    transition: background-color 100ms ease-in-out;
+}
+
+
+/* ==========================================================================
+   Scale (Slider)
+   ========================================================================== */
+
+scale > trough {
+    background-color: alpha(@theme_fg_color, 0.15);
+    border-radius: 9999px;
+}
+
+scale > trough > highlight {
+    background-color: @accent_bg_color;
+    border-radius: 9999px;
+}
+
+scale > trough > slider {
+    background-color: @theme_fg_color;
+    border-radius: 50%;
+    transition: background-color 100ms ease-in-out;
+}
+
+
+/* ==========================================================================
+   Progress Bar
+   ========================================================================== */
+
+progressbar > trough {
+    background-color: alpha(@theme_fg_color, 0.15);
+    border-radius: 9999px;
+}
+
+progressbar > trough > progress {
+    background-color: @accent_bg_color;
+    border-radius: 9999px;
+}
+
+
+/* ==========================================================================
+   Popover / Menu
+   ========================================================================== */
+
+popover > contents {
+    background-color: @popover_bg_color;
+    color: @popover_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+    border-radius: 8px;
+}
+
+popover modelbutton {
+    padding: 4px 8px;
+    transition: background-color 100ms ease-in-out;
+}
+
+popover modelbutton:hover {
+    background-color: alpha(@accent_color, 0.12);
+}
+
+
+/* ==========================================================================
+   Tooltip
+   ========================================================================== */
+
+tooltip {
+    background-color: @theme_fg_color;
+    color: @theme_bg_color;
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+tooltip > box {
+    color: @theme_bg_color;
+}
+
+
+/* ==========================================================================
+   Notebook (Tab Bar)
+   ========================================================================== */
+
+notebook > header > tabs > tab {
+    background-color: transparent;
+    color: alpha(@theme_fg_color, 0.55);
+    padding: 4px 12px;
+    border-bottom: 2px solid transparent;
+    transition: color 100ms ease-in-out,
+                background-color 100ms ease-in-out;
+}
+
+notebook > header > tabs > tab:checked {
+    background-color: @theme_base_color;
+    color: @theme_fg_color;
+    border-bottom-color: @accent_color;
+}
+
+notebook > header > tabs > tab:hover:not(:checked) {
+    background-color: alpha(@theme_fg_color, 0.05);
+    color: alpha(@theme_fg_color, 0.8);
+}
+
+
+/* ==========================================================================
+   Tab Bar (libadwaita)
+   ========================================================================== */
+
+tabbar tab {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    border-bottom: 2px solid transparent;
+    transition: background-color 100ms ease-in-out;
+}
+
+tabbar tab:selected {
+    background-color: @theme_base_color;
+    border-bottom-color: @accent_color;
+}
+
+
+/* ==========================================================================
+   Separator
+   ========================================================================== */
+
+separator {
+    background-color: alpha(@theme_fg_color, 0.15);
+    min-width: 1px;
+    min-height: 1px;
+}
+
+
+/* ==========================================================================
+   Sidebar / Places Sidebar / Stack Sidebar
+   ========================================================================== */
+
+placessidebar,
+stacksidebar {
+    background-color: @sidebar_bg_color;
+    color: @sidebar_fg_color;
+}
+
+placessidebar row:selected,
+stacksidebar row:selected {
+    background-color: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+}
+
+placessidebar row:hover,
+stacksidebar row:hover {
+    background-color: alpha(@accent_color, 0.08);
+}
+
+placessidebar row,
+stacksidebar row {
+    transition: background-color 100ms ease-in-out;
+}
+
+
+/* ==========================================================================
+   Card (libadwaita)
+   ========================================================================== */
+
+.card {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+    border-radius: 12px;
+}
+
+
+/* ==========================================================================
+   Action Bar / Toolbar
+   ========================================================================== */
+
+actionbar > revealer > box {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    border-top: 1px solid alpha(@theme_fg_color, 0.12);
+}
+
+
+/* ==========================================================================
+   Status Page (libadwaita)
+   ========================================================================== */
+
+statuspage {
+    background-color: @window_bg_color;
+}

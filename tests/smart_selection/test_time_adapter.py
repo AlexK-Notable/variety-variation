@@ -296,7 +296,7 @@ class TestGetSunTimes(unittest.TestCase):
         self.assertIsInstance(sunset, datetime)
 
     def test_get_sun_times_sunrise_before_sunset(self):
-        """Sunrise time is before sunset time (comparing naive local times)."""
+        """Sunrise time is before sunset time."""
         from variety.smart_selection.time_adapter import get_sun_times
 
         lat, lon = 40.7128, -74.0060  # New York
@@ -304,35 +304,27 @@ class TestGetSunTimes(unittest.TestCase):
 
         sunrise, sunset = get_sun_times(lat, lon, date)
 
-        # Astral returns UTC times. Compare by making naive and checking
-        # that sunrise hour is sensible (morning hours in UTC)
-        sunrise_naive = sunrise.replace(tzinfo=None) if sunrise.tzinfo else sunrise
-        sunset_naive = sunset.replace(tzinfo=None) if sunset.tzinfo else sunset
-
-        # Just check that we get two different datetime values
-        self.assertNotEqual(sunrise_naive, sunset_naive)
-
-        # Check that sunrise is in the morning hours (UTC: 4-14 for east coast summer)
-        self.assertGreaterEqual(sunrise_naive.hour, 4)
-        self.assertLessEqual(sunrise_naive.hour, 14)
+        # Just check that we get two different datetime values and
+        # sunrise is before sunset (timezone-aware comparison)
+        self.assertNotEqual(sunrise, sunset)
+        self.assertLess(sunrise, sunset)
 
     def test_get_sun_times_reasonable_hours(self):
         """Sun times are within reasonable hours (UTC)."""
         from variety.smart_selection.time_adapter import get_sun_times
+        from datetime import timezone
 
         lat, lon = 40.7128, -74.0060  # New York
         date = datetime(2025, 6, 21).date()
 
         sunrise, sunset = get_sun_times(lat, lon, date)
 
-        # Astral returns UTC times. New York is UTC-4 in summer.
-        # Sunrise ~5:25 local = ~9:25 UTC
-        # Sunset ~20:30 local = ~00:30 UTC next day (appears as 0:30)
-        sunrise_naive = sunrise.replace(tzinfo=None) if sunrise.tzinfo else sunrise
+        # Convert to UTC for hour assertions — astral may return local tz
+        sunrise_utc = sunrise.astimezone(timezone.utc)
 
-        # Sunrise should be morning hours in UTC (for US east coast: 8-14 UTC)
-        self.assertGreaterEqual(sunrise_naive.hour, 4)
-        self.assertLessEqual(sunrise_naive.hour, 14)
+        # NYC summer sunrise ~5:25 EDT = ~9:25 UTC
+        self.assertGreaterEqual(sunrise_utc.hour, 4)
+        self.assertLessEqual(sunrise_utc.hour, 14)
 
     def test_get_sun_times_fallback_without_astral(self):
         """get_sun_times returns default times if astral is not available."""

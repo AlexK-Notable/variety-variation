@@ -1,0 +1,69 @@
+{
+    "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
+    "name": "Test Theme Pack",
+    "author": "Test Author",
+    "themes": [
+        {
+            "name": "Test Dark",
+            "appearance": "dark",
+            "style": {
+                "background": "#1a1b26",
+                "editor.foreground": "#c0caf5",
+                "terminal.background": "#16161e",
+                "terminal.foreground": "#a9b1d6",
+                "terminal.ansi.black": "#15161e",
+                "terminal.ansi.red": "#f7768e",
+                "terminal.ansi.green": "#9ece6a",
+                "terminal.ansi.yellow": "#e0af68",
+                "terminal.ansi.blue": "#7aa2f7",
+                "terminal.ansi.magenta": "#bb9af7",
+                "terminal.ansi.cyan": "#7dcfff",
+                "terminal.ansi.white": "#a9b1d6",
+                "terminal.ansi.bright_black": "#414868",
+                "terminal.ansi.bright_red": "#f7768e",
+                "terminal.ansi.bright_green": "#9ece6a",
+                "terminal.ansi.bright_yellow": "#e0af68",
+                "terminal.ansi.bright_blue": "#7aa2f7",
+                "terminal.ansi.bright_magenta": "#bb9af7",
+                "terminal.ansi.bright_cyan": "#7dcfff",
+                "terminal.ansi.bright_white": "#c0caf5",
+                "players": [
+                    {
+                        "cursor": "#c0caf5",
+                        "background": "#c0caf5",
+                        "selection": "#28294480"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "Test Light",
+            "appearance": "light",
+            "style": {
+                "background": "#d5d6db",
+                "editor.foreground": "#343b59",
+                "terminal.ansi.black": "#0f0f14",
+                "terminal.ansi.red": "#8c4351",
+                "terminal.ansi.green": "#33635c",
+                "terminal.ansi.yellow": "#8f5e15",
+                "terminal.ansi.blue": "#34548a",
+                "terminal.ansi.magenta": "#5a4a78",
+                "terminal.ansi.cyan": "#0f4b6e",
+                "terminal.ansi.white": "#343b59",
+                "terminal.ansi.bright_black": "#9699a3",
+                "terminal.ansi.bright_red": "#8c4351",
+                "terminal.ansi.bright_green": "#33635c",
+                "terminal.ansi.bright_yellow": "#8f5e15",
+                "terminal.ansi.bright_blue": "#34548a",
+                "terminal.ansi.bright_magenta": "#5a4a78",
+                "terminal.ansi.bright_cyan": "#0f4b6e",
+                "terminal.ansi.bright_white": "#343b59",
+                "players": [
+                    {
+                        "cursor": "#343b59"
+                    }
+                ]
+            }
+        }
+    ]
+}

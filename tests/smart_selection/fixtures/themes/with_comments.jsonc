@@ -1,0 +1,38 @@
+// Zed theme file with JSONC comments
+// This file tests comment-stripping parsing
+{
+  "$schema": "https://zed.dev/schema/themes/v0.1.0.json",
+  "name": "Commented Theme", // inline comment
+  "themes": [
+    {
+      /* Block comment: this is the dark variant */
+      "name": "Commented Dark",
+      "appearance": "dark",
+      "style": {
+        "background": "#1a1b26",
+        "editor.foreground": "#c0caf5",
+        "terminal.background": "#1a1b26",
+        "terminal.foreground": "#c0caf5",
+        // ANSI colors below
+        "terminal.ansi.black": "#15161e",
+        "terminal.ansi.red": "#f7768e",
+        "terminal.ansi.green": "#9ece6a",
+        "terminal.ansi.yellow": "#e0af68",
+        "terminal.ansi.blue": "#7aa2f7",
+        "terminal.ansi.magenta": "#bb9af7",
+        "terminal.ansi.cyan": "#7dcfff",
+        "terminal.ansi.white": "#a9b1d6",
+        /* bright variants */
+        "terminal.ansi.bright_black": "#414868",
+        "terminal.ansi.bright_red": "#f7768e",
+        "terminal.ansi.bright_green": "#9ece6a",
+        "terminal.ansi.bright_yellow": "#e0af68",
+        "terminal.ansi.bright_blue": "#7aa2f7",
+        "terminal.ansi.bright_magenta": "#bb9af7",
+        "terminal.ansi.bright_cyan": "#7dcfff",
+        "terminal.ansi.bright_white": "#c0caf5",
+        "players": [{"cursor": "#c0caf5"}]
+      }
+    }
+  ]
+}

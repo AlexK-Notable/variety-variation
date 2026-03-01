@@ -86,7 +86,7 @@ class TestSchemaV7Migration(unittest.TestCase):
 
         # Open again - should not fail
         db2 = ImageDatabase(self.db_path)
-        self.assertEqual(db2.SCHEMA_VERSION, 7)
+        self.assertEqual(db2.SCHEMA_VERSION, 8)
         db2.close()
 
 
@@ -415,7 +415,7 @@ class TestPipelineConfig(unittest.TestCase):
 
         config = PipelineConfig(firecrawl_api_key=None)
         errors = config.validate()
-        self.assertIn("Firecrawl API key is required", errors)
+        self.assertIn("Firecrawl API key is required (set FIRECRAWL_API_KEY)", errors)
 
 
 if __name__ == '__main__':

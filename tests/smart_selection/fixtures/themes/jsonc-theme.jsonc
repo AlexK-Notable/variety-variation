@@ -1,0 +1,39 @@
+// This is a JSONC theme file with comments
+{
+    "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
+    "name": "JSONC Test Pack",
+    /* Multi-line
+       block comment */
+    "author": "JSONC Author",
+    "themes": [
+        {
+            "name": "JSONC Dark",
+            "appearance": "dark",
+            "style": {
+                "background": "#282c34", // one dark bg
+                "editor.foreground": "#abb2bf",
+                "terminal.ansi.black": "#282c34",
+                "terminal.ansi.red": "#e06c75",
+                "terminal.ansi.green": "#98c379",
+                "terminal.ansi.yellow": "#e5c07b",
+                "terminal.ansi.blue": "#61afef",
+                "terminal.ansi.magenta": "#c678dd",
+                "terminal.ansi.cyan": "#56b6c2",
+                "terminal.ansi.white": "#abb2bf",
+                "terminal.ansi.bright_black": "#545862",
+                "terminal.ansi.bright_red": "#e06c75",
+                "terminal.ansi.bright_green": "#98c379",
+                "terminal.ansi.bright_yellow": "#e5c07b",
+                "terminal.ansi.bright_blue": "#61afef",
+                "terminal.ansi.bright_magenta": "#c678dd",
+                "terminal.ansi.bright_cyan": "#56b6c2",
+                "terminal.ansi.bright_white": "#c8ccd4",
+                "players": [
+                    {
+                        "cursor": "#528bff" // cursor color
+                    }
+                ]
+            }
+        }
+    ]
+}

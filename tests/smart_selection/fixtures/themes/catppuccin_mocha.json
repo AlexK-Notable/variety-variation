@@ -1,0 +1,60 @@
+{
+  "$schema": "https://zed.dev/schema/themes/v0.1.0.json",
+  "name": "Catppuccin",
+  "themes": [
+    {
+      "name": "Catppuccin Mocha",
+      "appearance": "dark",
+      "style": {
+        "background": "#1e1e2e",
+        "editor.foreground": "#cdd6f4",
+        "terminal.background": "#1e1e2e",
+        "terminal.foreground": "#cdd6f4",
+        "terminal.ansi.black": "#45475a",
+        "terminal.ansi.red": "#f38ba8",
+        "terminal.ansi.green": "#a6e3a1",
+        "terminal.ansi.yellow": "#f9e2af",
+        "terminal.ansi.blue": "#89b4fa",
+        "terminal.ansi.magenta": "#f5c2e7",
+        "terminal.ansi.cyan": "#94e2d5",
+        "terminal.ansi.white": "#bac2de",
+        "terminal.ansi.bright_black": "#585b70",
+        "terminal.ansi.bright_red": "#f38ba8",
+        "terminal.ansi.bright_green": "#a6e3a1",
+        "terminal.ansi.bright_yellow": "#f9e2af",
+        "terminal.ansi.bright_blue": "#89b4fa",
+        "terminal.ansi.bright_magenta": "#f5c2e7",
+        "terminal.ansi.bright_cyan": "#94e2d5",
+        "terminal.ansi.bright_white": "#a6adc8",
+        "players": [{"cursor": "#f5e0dc"}]
+      }
+    },
+    {
+      "name": "Catppuccin Latte",
+      "appearance": "light",
+      "style": {
+        "background": "#eff1f5",
+        "editor.foreground": "#4c4f69",
+        "terminal.background": "#eff1f5",
+        "terminal.foreground": "#4c4f69",
+        "terminal.ansi.black": "#5c5f77",
+        "terminal.ansi.red": "#d20f39",
+        "terminal.ansi.green": "#40a02b",
+        "terminal.ansi.yellow": "#df8e1d",
+        "terminal.ansi.blue": "#1e66f5",
+        "terminal.ansi.magenta": "#ea76cb",
+        "terminal.ansi.cyan": "#179299",
+        "terminal.ansi.white": "#acb0be",
+        "terminal.ansi.bright_black": "#6c6f85",
+        "terminal.ansi.bright_red": "#d20f39",
+        "terminal.ansi.bright_green": "#40a02b",
+        "terminal.ansi.bright_yellow": "#df8e1d",
+        "terminal.ansi.bright_blue": "#1e66f5",
+        "terminal.ansi.bright_magenta": "#ea76cb",
+        "terminal.ansi.bright_cyan": "#179299",
+        "terminal.ansi.bright_white": "#bcc0cc",
+        "players": [{"cursor": "#dc8a78"}]
+      }
+    }
+  ]
+}
