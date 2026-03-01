@@ -15,6 +15,7 @@
 # with this program.  If not, see <http://www.gnu.org/licenses/>.
 ### END LICENSE
 
+import shutil
 import subprocess
 import unittest
 
@@ -22,10 +23,13 @@ import unittest
 class TestPylint(unittest.TestCase):
     def test_project_errors_only(self):
         """run pylint in error only mode
-        
+
         your code may well work even with pylint errors
         but have some unusual code"""
-        return_code = subprocess.call(["pylint3", "-E", "variety"])
+        pylint = shutil.which("pylint3") or shutil.which("pylint")
+        if not pylint:
+            self.skipTest("pylint not found")
+        return_code = subprocess.call([pylint, "-E", "variety"])
         # not needed because nosetests displays pylint console output
         # self.assertEqual(return_code, 0)
 
