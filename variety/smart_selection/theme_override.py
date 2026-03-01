@@ -58,6 +58,20 @@ class ThemeOverride:
         self._active_theme_id = theme_id
         self._cached_palette = theme.to_dict()
 
+    def activate_with_palette(self, theme_id: str, palette: Dict[str, str]) -> None:
+        """Activate theme override using a provided palette dict.
+
+        This allows applying unsaved edits directly without requiring
+        them to be persisted to the database first.
+
+        Args:
+            theme_id: ID of the base theme being edited.
+            palette: Full palette dict with color0-15, background,
+                foreground, cursor keys.
+        """
+        self._active_theme_id = theme_id
+        self._cached_palette = dict(palette)
+
     def deactivate(self) -> None:
         """Deactivate theme override, return to wallust-driven mode."""
         self._active_theme_id = None

@@ -122,18 +122,39 @@ def _hex_to_rgb(hex_color: str):
 
 
 def _run_color_chooser(parent_window, title: str, current_hex: str) -> Optional[str]:
-    """Open a GTK ColorChooserDialog and return the selected hex color.
+    """Open a color chooser that starts in the HSV wheel editor view.
+
+    Uses a custom Gtk.Dialog embedding Gtk.ColorChooserWidget with
+    show-editor=True so the user lands directly on the HSV wheel
+    instead of the default swatch grid.
 
     Returns None if the user cancels.
     """
-    dialog = Gtk.ColorChooserDialog(title=title, transient_for=parent_window)
+    dialog = Gtk.Dialog(
+        title=title,
+        transient_for=parent_window,
+        flags=Gtk.DialogFlags.MODAL,
+    )
+    dialog.add_buttons(
+        Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+        Gtk.STOCK_OK, Gtk.ResponseType.OK,
+    )
+    dialog.set_default_response(Gtk.ResponseType.OK)
+
+    chooser = Gtk.ColorChooserWidget(show_editor=True)
+    chooser.set_use_alpha(False)
     r, g, b = _hex_to_rgb(current_hex)
-    dialog.set_rgba(Gdk.RGBA(r, g, b, 1.0))
-    dialog.set_use_alpha(False)
+    chooser.set_rgba(Gdk.RGBA(r, g, b, 1.0))
+
+    box = dialog.get_content_area()
+    box.set_border_width(8)
+    box.pack_start(chooser, True, True, 0)
+    dialog.show_all()
+
     response = dialog.run()
     result = None
     if response == Gtk.ResponseType.OK:
-        rgba = dialog.get_rgba()
+        rgba = chooser.get_rgba()
         result = '#{:02x}{:02x}{:02x}'.format(
             int(rgba.red * 255), int(rgba.green * 255), int(rgba.blue * 255)
         )
@@ -274,20 +295,12 @@ class ThemeBrowserPage(Gtk.Box):
         self._swatch_grid = ColorSwatchGrid(on_color_edited=self._on_color_edited)
         right_box.pack_start(self._swatch_grid, False, False, 0)
 
-        # Special colors (background, foreground, cursor) — clickable
+        # Special colors (background, foreground, cursor) — clickable swatches
         meta_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        self._bg_btn = Gtk.Button(label="BG: -")
-        self._bg_btn.set_relief(Gtk.ReliefStyle.NONE)
-        self._bg_btn.connect('clicked', self._on_meta_color_clicked, 'background')
-        self._fg_btn = Gtk.Button(label="FG: -")
-        self._fg_btn.set_relief(Gtk.ReliefStyle.NONE)
-        self._fg_btn.connect('clicked', self._on_meta_color_clicked, 'foreground')
-        self._cursor_btn = Gtk.Button(label="Cursor: -")
-        self._cursor_btn.set_relief(Gtk.ReliefStyle.NONE)
-        self._cursor_btn.connect('clicked', self._on_meta_color_clicked, 'cursor')
-        meta_box.pack_start(self._bg_btn, False, False, 0)
-        meta_box.pack_start(self._fg_btn, False, False, 0)
-        meta_box.pack_start(self._cursor_btn, False, False, 0)
+        self._meta_swatches = {}  # key -> (DrawingArea, Label)
+        for key, display_name in [('background', 'BG'), ('foreground', 'FG'), ('cursor', 'Cursor')]:
+            widget = self._build_meta_color_widget(key, display_name)
+            meta_box.pack_start(widget, False, False, 0)
         right_box.pack_start(meta_box, False, False, 0)
 
         # Theme info label
@@ -398,9 +411,9 @@ class ThemeBrowserPage(Gtk.Box):
             self._apply_btn.set_sensitive(False)
             self._save_custom_btn.set_sensitive(False)
             self._info_label.set_text("")
-            self._bg_btn.set_label("BG: -")
-            self._fg_btn.set_label("FG: -")
-            self._cursor_btn.set_label("Cursor: -")
+            for key, (swatch_da, hex_label) in self._meta_swatches.items():
+                hex_label.set_text("-")
+                swatch_da.queue_draw()
             self._match_label.set_text("")
             return
 
@@ -437,14 +450,12 @@ class ThemeBrowserPage(Gtk.Box):
         preview_palette = dict(palette) if palette else None
         self._terminal_preview.set_palette(preview_palette)
         self._swatch_grid.set_palette(preview_palette)
-        if palette:
-            self._bg_btn.set_label(f"BG: {palette.get('background', '-')}")
-            self._fg_btn.set_label(f"FG: {palette.get('foreground', '-')}")
-            self._cursor_btn.set_label(f"Cursor: {palette.get('cursor', '-')}")
-        else:
-            self._bg_btn.set_label("BG: -")
-            self._fg_btn.set_label("FG: -")
-            self._cursor_btn.set_label("Cursor: -")
+        for key, (swatch_da, hex_label) in self._meta_swatches.items():
+            if palette and key in palette:
+                hex_label.set_text(palette[key])
+            else:
+                hex_label.set_text("-")
+            swatch_da.queue_draw()
 
     # =========================================================================
     # Color editing
@@ -458,9 +469,51 @@ class ThemeBrowserPage(Gtk.Box):
         self._save_custom_btn.set_sensitive(True)
         self._update_preview()
 
-    def _on_meta_color_clicked(self, button, color_key):
-        """Handle click on BG/FG/Cursor button to edit that color."""
-        if not self._editing_palette:
+    def _build_meta_color_widget(self, color_key: str, display_name: str) -> Gtk.EventBox:
+        """Build an EventBox containing a color swatch + hex label for a meta color."""
+        event_box = Gtk.EventBox()
+        event_box.set_tooltip_text(f"Click to edit {color_key}")
+        event_box.connect('button-press-event', self._on_meta_swatch_clicked, color_key)
+
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+        label_prefix = Gtk.Label(label=f"{display_name}:")
+        hbox.pack_start(label_prefix, False, False, 0)
+
+        swatch = Gtk.DrawingArea()
+        swatch.set_size_request(24, 18)
+        swatch.connect('draw', self._draw_meta_swatch, color_key)
+        hbox.pack_start(swatch, False, False, 0)
+
+        hex_label = Gtk.Label(label="-")
+        hbox.pack_start(hex_label, False, False, 0)
+
+        event_box.add(hbox)
+        self._meta_swatches[color_key] = (swatch, hex_label)
+        return event_box
+
+    def _draw_meta_swatch(self, widget, cr, color_key):
+        """Draw the color rectangle for a BG/FG/Cursor swatch."""
+        alloc = widget.get_allocation()
+        w, h = alloc.width, alloc.height
+
+        hex_color = '#888888'
+        if self._editing_palette and color_key in self._editing_palette:
+            hex_color = self._editing_palette[color_key]
+
+        r, g, b = _hex_to_rgb(hex_color)
+        cr.set_source_rgb(r, g, b)
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.3)
+        cr.set_line_width(1)
+        cr.rectangle(0.5, 0.5, w - 1, h - 1)
+        cr.stroke()
+
+    def _on_meta_swatch_clicked(self, event_box, event, color_key):
+        """Handle click on a BG/FG/Cursor swatch to edit that color."""
+        if event.button != 1 or not self._editing_palette:
             return
         current = self._editing_palette.get(color_key, '#888888')
         labels = {'background': 'Background', 'foreground': 'Foreground', 'cursor': 'Cursor'}
@@ -473,11 +526,28 @@ class ThemeBrowserPage(Gtk.Box):
             self._update_preview()
 
     def _on_save_custom_clicked(self, button):
-        """Save edited colors as a new custom theme."""
+        """Save edited colors as a custom theme.
+
+        If the selected theme is already a custom theme, prefills the
+        existing name. Warns on name collision with an overwrite prompt.
+        Resets the has-edits flag after a successful save.
+        """
         if not self._theme_library or not self._selected_theme_id:
             return
         if not self._editing_palette:
             return
+
+        # Determine default name: reuse existing name for custom themes,
+        # prefix "Custom - " for non-custom themes.
+        _, tree_iter = self._theme_view.get_selection().get_selected()
+        child_iter = self._theme_filter.convert_iter_to_child_iter(tree_iter)
+        current_name = self._theme_store[child_iter][1]
+        source_type = self._theme_store[child_iter][3]
+
+        if source_type == 'custom':
+            default_name = current_name
+        else:
+            default_name = f"Custom - {current_name}"
 
         # Prompt for name
         dialog = Gtk.Dialog(
@@ -495,7 +565,7 @@ class ThemeBrowserPage(Gtk.Box):
         label = Gtk.Label(label="Name for the custom theme:")
         box.pack_start(label, False, False, 0)
         entry = Gtk.Entry()
-        entry.set_text(f"Custom - {self._theme_store[self._theme_filter.convert_iter_to_child_iter(self._theme_view.get_selection().get_selected()[1])][1]}")
+        entry.set_text(default_name)
         entry.set_activates_default(True)
         box.pack_start(entry, False, False, 0)
         dialog.set_default_response(Gtk.ResponseType.OK)
@@ -507,6 +577,25 @@ class ThemeBrowserPage(Gtk.Box):
 
         if response != Gtk.ResponseType.OK or not name:
             return
+
+        # Check for name collision: does custom:fork:{name} already exist
+        # as a *different* theme from the one we're editing?
+        target_id = f"custom:fork:{name}"
+        if target_id != self._selected_theme_id:
+            existing = self._theme_library.db.get_color_theme(target_id)
+            if existing is not None:
+                confirm = Gtk.MessageDialog(
+                    transient_for=self.get_toplevel(),
+                    flags=Gtk.DialogFlags.MODAL,
+                    message_type=Gtk.MessageType.QUESTION,
+                    buttons=Gtk.ButtonsType.YES_NO,
+                    text=f"A custom theme named \"{name}\" already exists.\n\n"
+                         f"Overwrite it?",
+                )
+                overwrite = confirm.run()
+                confirm.destroy()
+                if overwrite != Gtk.ResponseType.YES:
+                    return
 
         try:
             # Fork the theme
@@ -530,6 +619,9 @@ class ThemeBrowserPage(Gtk.Box):
 
             # Save to database
             self._theme_library.db.upsert_color_theme(forked)
+
+            # Reset has-edits flag
+            self._save_custom_btn.set_sensitive(False)
 
             # Refresh list and select the new theme
             self._refresh_theme_list()
@@ -557,12 +649,22 @@ class ThemeBrowserPage(Gtk.Box):
     # =========================================================================
 
     def _on_apply_clicked(self, button):
-        """Activate selected theme and trigger template processing."""
+        """Activate selected theme and trigger template processing.
+
+        If the user has unsaved color edits, applies the editing palette
+        directly via activate_with_palette() instead of loading from DB.
+        """
         if not self._selected_theme_id:
             return
         if self._theme_override:
             try:
-                self._theme_override.activate(self._selected_theme_id)
+                has_edits = self._save_custom_btn.get_sensitive()
+                if has_edits and self._editing_palette:
+                    self._theme_override.activate_with_palette(
+                        self._selected_theme_id, self._editing_palette
+                    )
+                else:
+                    self._theme_override.activate(self._selected_theme_id)
                 if self._config:
                     self._config.active_theme_id = self._selected_theme_id
                 self._clear_btn.set_sensitive(True)
