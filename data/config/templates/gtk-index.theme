@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Variety-Dynamic
+Comment=Dynamically generated theme from wallpaper colors
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Variety-Dynamic
+MetacityTheme=Adwaita
+IconTheme=hicolor
+CursorTheme=default
