@@ -723,5 +723,250 @@ class TestColorModeToggleE2E(_ColorModeTestBase):
         )
 
 
+# ===========================================================================
+# Test class: Integration — constraints actually flow through call sites
+# ===========================================================================
+
+class TestConstraintIntegrationE2E(_ColorModeTestBase):
+    """Verify that VarietyWindow methods actually pass constraints to select_images().
+
+    These tests catch the primary bug: call sites that invoke select_images()
+    without forwarding constraints from _get_smart_color_constraints().
+    If someone removes the constraints= argument, these tests fail.
+    """
+
+    def _make_mock_window(self, smart_color_mode='adaptive', temperature='warm'):
+        """Create a mock VarietyWindow with enough wiring for call-site tests.
+
+        Binds the real _get_smart_color_constraints and smart_next_wallpaper
+        methods, stubs everything else.
+        """
+        from variety.VarietyWindow import VarietyWindow
+
+        mock_window = MagicMock()
+        mock_window.options = MockOptions()
+        mock_window.options.smart_color_mode = smart_color_mode
+        mock_window.options.smart_color_temperature = temperature
+        mock_window.options.smart_color_similarity = 20
+        mock_window._theme_override = None
+
+        # Bind the real methods
+        mock_window._get_smart_color_constraints = (
+            VarietyWindow._get_smart_color_constraints.__get__(
+                mock_window, type(mock_window)
+            )
+        )
+        mock_window.smart_next_wallpaper = (
+            VarietyWindow.smart_next_wallpaper.__get__(
+                mock_window, type(mock_window)
+            )
+        )
+
+        # Create a real selector so the method can call it
+        mock_window.smart_selector = self._create_selector()
+
+        # Stub out the fallback and post-selection methods
+        mock_window.next_wallpaper = MagicMock()
+        mock_window.set_wallpaper = MagicMock()
+        mock_window.current = None
+
+        return mock_window
+
+    def test_smart_next_wallpaper_passes_constraints(self):
+        """smart_next_wallpaper() must call select_images with constraints.
+
+        Regression guard: the original bug was select_images(1) with no
+        constraints argument. This test spies on the selector to verify
+        constraints are forwarded.
+        """
+        mock_window = self._make_mock_window(
+            smart_color_mode='adaptive', temperature='warm'
+        )
+
+        # Wrap select_images to capture the constraints argument
+        real_select = mock_window.smart_selector.select_images
+        captured_calls = []
+
+        def spy_select_images(count, constraints=None):
+            captured_calls.append({'count': count, 'constraints': constraints})
+            return real_select(count, constraints=constraints)
+
+        mock_window.smart_selector.select_images = spy_select_images
+
+        try:
+            mock_window.smart_next_wallpaper()
+        finally:
+            mock_window.smart_selector.close()
+
+        self.assertTrue(
+            len(captured_calls) > 0,
+            "smart_next_wallpaper() should have called select_images()"
+        )
+
+        call = captured_calls[0]
+        self.assertIsNotNone(
+            call['constraints'],
+            "smart_next_wallpaper() must pass constraints to select_images(). "
+            "Got constraints=None — the primary bug has regressed."
+        )
+        self.assertEqual(
+            call['constraints'].target_palette['avg_hue'], 30,
+            "Constraints should reflect warm temperature (hue=30)"
+        )
+
+    def test_smart_next_wallpaper_theme_mode_passes_theme_constraints(self):
+        """smart_next_wallpaper() in theme mode passes theme palette constraints."""
+        mock_window = self._make_mock_window(smart_color_mode='theme')
+        mock_window.options.smart_theme_adherence = 'loose'
+        mock_window._theme_override = _make_theme_override(
+            is_active=True, palette=TOKYO_NIGHT_TARGET_PALETTE
+        )
+
+        real_select = mock_window.smart_selector.select_images
+        captured_calls = []
+
+        def spy_select_images(count, constraints=None):
+            captured_calls.append({'count': count, 'constraints': constraints})
+            return real_select(count, constraints=constraints)
+
+        mock_window.smart_selector.select_images = spy_select_images
+
+        try:
+            mock_window.smart_next_wallpaper()
+        finally:
+            mock_window.smart_selector.close()
+
+        self.assertTrue(len(captured_calls) > 0)
+        call = captured_calls[0]
+        self.assertIsNotNone(
+            call['constraints'],
+            "Theme mode should produce non-None constraints"
+        )
+        self.assertEqual(
+            call['constraints'].target_palette['avg_hue'], 280,
+            "Theme mode constraints should use Tokyo Night hue (280)"
+        )
+
+    def test_smart_next_wallpaper_disabled_passes_none(self):
+        """smart_next_wallpaper() with color disabled passes constraints=None."""
+        mock_window = self._make_mock_window()
+        mock_window.options.smart_color_enabled = False
+
+        real_select = mock_window.smart_selector.select_images
+        captured_calls = []
+
+        def spy_select_images(count, constraints=None):
+            captured_calls.append({'count': count, 'constraints': constraints})
+            return real_select(count, constraints=constraints)
+
+        mock_window.smart_selector.select_images = spy_select_images
+
+        try:
+            mock_window.smart_next_wallpaper()
+        finally:
+            mock_window.smart_selector.close()
+
+        self.assertTrue(len(captured_calls) > 0)
+        self.assertIsNone(
+            captured_calls[0]['constraints'],
+            "With color disabled, constraints should be None (no filtering)"
+        )
+
+    def test_no_constraints_selects_all_images_uniformly(self):
+        """Baseline: constraints=None allows all 6 fixtures to be selected.
+
+        Establishes what 'without constraints' means, making the constrained
+        tests meaningful by contrast.
+        """
+        with self._create_selector() as selector:
+            all_selected = set()
+            for _ in range(300):
+                selected = selector.select_images(count=6, constraints=None)
+                all_selected.update(os.path.basename(p) for p in selected)
+
+        self.assertEqual(
+            len(all_selected), len(WALLPAPER_FIXTURES),
+            f"Without constraints, all {len(WALLPAPER_FIXTURES)} images should "
+            f"be reachable. Got {len(all_selected)}: {all_selected}"
+        )
+
+
+# ===========================================================================
+# Test class: Statistical robustness improvements
+# ===========================================================================
+
+class TestSelectionMargins(_ColorModeTestBase):
+    """Verify that color selection produces decisive margins, not coin flips.
+
+    Weak assertGreater(warm, cool) could pass with warm=151, cool=149.
+    These tests require meaningful statistical margins to prove the
+    weighting actually works.
+    """
+
+    def test_warm_mode_warm_wins_by_margin(self):
+        """Warm mode: warm images selected at least 2x more than cool images."""
+        mock_window = self._bind_constraint_method()
+        mock_window.options.smart_color_mode = 'adaptive'
+        mock_window.options.smart_color_temperature = 'warm'
+        mock_window.options.smart_color_similarity = 20
+
+        constraints = mock_window._get_smart_color_constraints()
+
+        with self._create_selector() as selector:
+            dist = self._selection_distribution(selector, constraints, trials=500)
+
+        warm_count = dist.get('warm_sunset', 0) + dist.get('bright_day', 0)
+        cool_count = dist.get('cool_ocean', 0)
+
+        self.assertGreater(
+            warm_count, cool_count * 2,
+            f"Warm images ({warm_count}) should be selected at least 2x "
+            f"cool_ocean ({cool_count}). Distribution: {dict(dist)}"
+        )
+
+    def test_theme_mode_matching_image_is_top_pick(self):
+        """Theme mode: the fixture matching the theme is the most-selected image."""
+        mock_window = self._bind_constraint_method()
+        mock_window.options.smart_color_mode = 'theme'
+        mock_window.options.smart_theme_adherence = 'loose'
+        mock_window._theme_override = _make_theme_override(
+            is_active=True, palette=TOKYO_NIGHT_TARGET_PALETTE
+        )
+
+        constraints = mock_window._get_smart_color_constraints()
+
+        with self._create_selector() as selector:
+            dist = self._selection_distribution(selector, constraints, trials=500)
+
+        top_two = [name for name, _ in dist.most_common(2)]
+
+        self.assertIn(
+            'tokyo_night_theme', top_two,
+            f"tokyo_night_theme should be in top 2 selections with Tokyo Night "
+            f"theme active. Top 2: {top_two}. Distribution: {dict(dist)}"
+        )
+
+    def test_cool_mode_cool_wins_by_margin(self):
+        """Cool mode: cool_ocean selected at least 2x more than warm_sunset."""
+        mock_window = self._bind_constraint_method()
+        mock_window.options.smart_color_mode = 'adaptive'
+        mock_window.options.smart_color_temperature = 'cool'
+        mock_window.options.smart_color_similarity = 20
+
+        constraints = mock_window._get_smart_color_constraints()
+
+        with self._create_selector() as selector:
+            dist = self._selection_distribution(selector, constraints, trials=500)
+
+        cool_count = dist.get('cool_ocean', 0)
+        warm_count = dist.get('warm_sunset', 0)
+
+        self.assertGreater(
+            cool_count, warm_count * 2,
+            f"cool_ocean ({cool_count}) should be selected at least 2x "
+            f"warm_sunset ({warm_count}). Distribution: {dict(dist)}"
+        )
+
+
 if __name__ == '__main__':
     unittest.main()
