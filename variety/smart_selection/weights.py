@@ -15,21 +15,22 @@ from variety.smart_selection.palette import palette_similarity
 
 
 def hex_to_lightness(hex_color: str) -> float:
-    """Calculate HSL lightness from a hex color string.
+    """Calculate BT.709 relative luminance from a hex color string.
+
+    Uses the ITU-R BT.709 standard: Y = 0.2126R + 0.7152G + 0.0722B.
+    This correctly models human brightness perception.
 
     Args:
         hex_color: Hex color string like "#FF0000" or "#ff0000".
 
     Returns:
-        Lightness value from 0.0 (black) to 1.0 (white).
+        Luminance value from 0.0 (black) to 1.0 (white).
     """
     hex_color = hex_color.lstrip('#')
     r = int(hex_color[0:2], 16) / 255.0
     g = int(hex_color[2:4], 16) / 255.0
     b = int(hex_color[4:6], 16) / 255.0
-    max_c = max(r, g, b)
-    min_c = min(r, g, b)
-    return (max_c + min_c) / 2.0
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
 def recency_factor(
@@ -215,11 +216,13 @@ def calculate_time_affinity(
     if target_lightness is None or target_temperature is None or target_saturation is None:
         return 1.0
 
-    # Get image palette metrics
-    # NOTE: avg_lightness is calculated from the RAW palette colors (before
-    # Dark16/Light16 theming), so it represents true image brightness.
-    # See palette.py extract_palette() for how this is calculated.
-    img_lightness = image_palette.avg_lightness if image_palette.avg_lightness is not None else 0.5
+    # Get image brightness — prefer perceived_brightness (PIL pixel median)
+    # over avg_lightness (palette-based BT.709) for better accuracy.
+    img_lightness = (
+        image_palette.perceived_brightness
+        if image_palette.perceived_brightness is not None
+        else (image_palette.avg_lightness if image_palette.avg_lightness is not None else 0.5)
+    )
     img_temperature = image_palette.color_temperature if image_palette.color_temperature is not None else 0.0
     img_saturation = image_palette.avg_saturation if image_palette.avg_saturation is not None else 0.5
 

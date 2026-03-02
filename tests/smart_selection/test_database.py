@@ -1662,7 +1662,7 @@ class TestColorThemeMigration(unittest.TestCase):
         }
 
     def test_fresh_database_has_schema_version_8(self):
-        """Fresh database created by ImageDatabase has SCHEMA_VERSION 8.
+        """Fresh database created by ImageDatabase has SCHEMA_VERSION >= 8.
 
         Bug caught: SCHEMA_VERSION not bumped from 7 to 8 in database.py.
         """
@@ -1679,7 +1679,7 @@ class TestColorThemeMigration(unittest.TestCase):
         ).fetchone()[0]
         conn.close()
 
-        self.assertEqual(version, '8')
+        self.assertGreaterEqual(int(version), 8)
 
     def test_fresh_database_has_color_themes_table(self):
         """Fresh database has a color_themes table.
@@ -1782,11 +1782,11 @@ class TestColorThemeMigration(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(result, "color_themes table not created by migration")
 
-        # Verify version updated to 8
+        # Verify version updated to at least 8
         version = cursor.execute(
             "SELECT value FROM schema_info WHERE key='version'"
         ).fetchone()[0]
-        self.assertEqual(version, '8')
+        self.assertGreaterEqual(int(version), 8)
 
         db.close()
 
@@ -1939,11 +1939,11 @@ class TestColorThemeMigration(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(result, "color_themes table missing after full chain migration")
 
-        # Verify version is 8
+        # Verify version is at least 8
         version = cursor.execute(
             "SELECT value FROM schema_info WHERE key='version'"
         ).fetchone()[0]
-        self.assertEqual(version, '8')
+        self.assertGreaterEqual(int(version), 8)
 
         db.close()
 

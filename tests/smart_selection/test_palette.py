@@ -904,5 +904,261 @@ class TestCalculatePaletteMetrics(unittest.TestCase):
         )
 
 
+class TestHexToLuminance(unittest.TestCase):
+    """Tests for hex_to_luminance BT.709 relative luminance.
+
+    BT.709 formula: Y = 0.2126R + 0.7152G + 0.0722B
+    This is the core fix for perceptual luminance — HSL lightness treats
+    all channels equally ((max+min)/2), giving yellow and blue the same
+    L=0.5 even though yellow looks much brighter.
+    """
+
+    def test_import_hex_to_luminance(self):
+        """hex_to_luminance can be imported from palette module."""
+        from variety.smart_selection.palette import hex_to_luminance
+        self.assertIsNotNone(hex_to_luminance)
+
+    def test_black_is_zero(self):
+        """Black (#000000) has luminance 0.0."""
+        from variety.smart_selection.palette import hex_to_luminance
+        self.assertAlmostEqual(hex_to_luminance('#000000'), 0.0, places=4)
+
+    def test_white_is_one(self):
+        """White (#FFFFFF) has luminance 1.0."""
+        from variety.smart_selection.palette import hex_to_luminance
+        self.assertAlmostEqual(hex_to_luminance('#FFFFFF'), 1.0, places=4)
+
+    def test_yellow_much_brighter_than_blue(self):
+        """Yellow (#FFFF00) is perceptually much brighter than blue (#0000FF).
+
+        This is THE key test — the whole reason for switching from HSL to BT.709.
+        HSL gives both L=0.5, but BT.709 correctly gives yellow ~0.93
+        and blue ~0.07, matching human perception.
+        """
+        from variety.smart_selection.palette import hex_to_luminance
+
+        yellow = hex_to_luminance('#FFFF00')
+        blue = hex_to_luminance('#0000FF')
+
+        # Yellow should be at least 10x brighter than blue
+        self.assertGreater(yellow, 0.9, f"Yellow should be very bright, got {yellow}")
+        self.assertLess(blue, 0.1, f"Blue should be very dark, got {blue}")
+        self.assertGreater(yellow / blue, 10, "Yellow should be >10x brighter than blue")
+
+    def test_green_brighter_than_red(self):
+        """Green contributes most to perceived brightness (71.52% in BT.709).
+
+        Green (#00FF00) should be significantly brighter than red (#FF0000),
+        which should be brighter than blue (#0000FF).
+        """
+        from variety.smart_selection.palette import hex_to_luminance
+
+        green = hex_to_luminance('#00FF00')
+        red = hex_to_luminance('#FF0000')
+        blue = hex_to_luminance('#0000FF')
+
+        self.assertGreater(green, red, "Green should be brighter than red")
+        self.assertGreater(red, blue, "Red should be brighter than blue")
+        # BT.709 coefficients: G=0.7152, R=0.2126, B=0.0722
+        self.assertAlmostEqual(green, 0.7152, places=3)
+        self.assertAlmostEqual(red, 0.2126, places=3)
+        self.assertAlmostEqual(blue, 0.0722, places=3)
+
+    def test_50_percent_gray(self):
+        """50% gray (#808080) should be ~0.50 luminance (channel-independent)."""
+        from variety.smart_selection.palette import hex_to_luminance
+
+        gray = hex_to_luminance('#808080')
+        # 128/255 * (0.2126 + 0.7152 + 0.0722) = 128/255 ≈ 0.502
+        self.assertAlmostEqual(gray, 128 / 255.0, places=2)
+
+    def test_lowercase_hex(self):
+        """Handles lowercase hex input."""
+        from variety.smart_selection.palette import hex_to_luminance
+
+        upper = hex_to_luminance('#FF0000')
+        lower = hex_to_luminance('#ff0000')
+        self.assertAlmostEqual(upper, lower, places=6)
+
+
+class TestComputePerceivedBrightness(unittest.TestCase):
+    """Tests for _compute_perceived_brightness PIL-based brightness.
+
+    This function converts an image to grayscale (BT.601), computes
+    median brightness plus P10/P90 percentiles for range detection.
+    """
+
+    def setUp(self):
+        """Create temporary directory for test images."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _make_image(self, name, color, size=(100, 100)):
+        """Create a solid-color test image."""
+        path = os.path.join(self.temp_dir, name)
+        img = Image.new('RGB', size, color=color)
+        img.save(path)
+        return path
+
+    def test_import(self):
+        """_compute_perceived_brightness can be imported."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+        self.assertIsNotNone(_compute_perceived_brightness)
+
+    def test_dark_image_low_brightness(self):
+        """Near-black image has very low perceived brightness."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        path = self._make_image('dark.jpg', '#0A0A0A')
+        result = _compute_perceived_brightness(path)
+
+        self.assertIsNotNone(result)
+        self.assertLess(result['perceived_brightness'], 0.1)
+        self.assertLess(result['brightness_p90'], 0.1)
+
+    def test_bright_image_high_brightness(self):
+        """Near-white image has very high perceived brightness."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        path = self._make_image('bright.jpg', '#F0F0F0')
+        result = _compute_perceived_brightness(path)
+
+        self.assertIsNotNone(result)
+        self.assertGreater(result['perceived_brightness'], 0.9)
+        self.assertGreater(result['brightness_p10'], 0.9)
+
+    def test_mixed_image_p90_detects_bright_spots(self):
+        """Image with dark + bright areas has P90 above median.
+
+        This is the night-mode use case: median brightness is low (dark image),
+        but P90 catches the bright region that would be glaring at night.
+        Use PNG to avoid JPEG compression artifacts blurring boundaries.
+        """
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        # Create image: 70% dark, 30% bright (enough for P90 to land in bright)
+        img = Image.new('RGB', (100, 100), color='#0A0A0A')
+        pixels = img.load()
+        # Make bottom 30 rows bright white
+        for y in range(70, 100):
+            for x in range(100):
+                pixels[x, y] = (240, 240, 240)
+        path = os.path.join(self.temp_dir, 'mixed.png')
+        img.save(path)
+
+        result = _compute_perceived_brightness(path)
+
+        self.assertIsNotNone(result)
+        # Median should be low (70% of pixels are dark)
+        self.assertLess(result['perceived_brightness'], 0.3)
+        # P90 should be high (30% bright pixels means P90 lands in bright area)
+        self.assertGreater(result['brightness_p90'], 0.5)
+        # P10 should be low (darkest 10% is very dark)
+        self.assertLess(result['brightness_p10'], 0.1)
+
+    def test_returns_all_three_keys(self):
+        """Result dict contains perceived_brightness, brightness_p10, brightness_p90."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        path = self._make_image('gray.jpg', '#808080')
+        result = _compute_perceived_brightness(path)
+
+        self.assertIsNotNone(result)
+        self.assertIn('perceived_brightness', result)
+        self.assertIn('brightness_p10', result)
+        self.assertIn('brightness_p90', result)
+
+    def test_values_between_zero_and_one(self):
+        """All values are normalized to [0, 1] range."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        path = self._make_image('mid.jpg', '#808080')
+        result = _compute_perceived_brightness(path)
+
+        for key in ('perceived_brightness', 'brightness_p10', 'brightness_p90'):
+            self.assertGreaterEqual(result[key], 0.0)
+            self.assertLessEqual(result[key], 1.0)
+
+    def test_p10_less_than_p90(self):
+        """P10 should always be <= P90."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        # Gradient image for varied brightness
+        img = Image.new('RGB', (100, 100))
+        pixels = img.load()
+        for y in range(100):
+            gray = int((y / 100) * 255)
+            for x in range(100):
+                pixels[x, y] = (gray, gray, gray)
+        path = os.path.join(self.temp_dir, 'gradient.jpg')
+        img.save(path)
+
+        result = _compute_perceived_brightness(path)
+        self.assertLessEqual(result['brightness_p10'], result['brightness_p90'])
+
+    def test_nonexistent_file_returns_none(self):
+        """Returns None for nonexistent file."""
+        from variety.smart_selection.palette import _compute_perceived_brightness
+
+        result = _compute_perceived_brightness('/nonexistent/path.jpg')
+        self.assertIsNone(result)
+
+
+class TestBT709InPaletteMetrics(unittest.TestCase):
+    """Tests that calculate_palette_metrics uses BT.709 for avg_lightness.
+
+    After our change, avg_lightness should reflect BT.709 luminance,
+    not HSL lightness. This means yellow palettes are bright and blue
+    palettes are dark — matching human perception.
+    """
+
+    def test_yellow_palette_high_lightness(self):
+        """All-yellow palette has high avg_lightness (BT.709 ≈ 0.93)."""
+        from variety.smart_selection.palette import calculate_palette_metrics
+
+        colors = {f'color{i}': '#FFFF00' for i in range(16)}
+        result = calculate_palette_metrics(colors)
+
+        # BT.709: 0.2126*1 + 0.7152*1 + 0.0722*0 = 0.9278
+        self.assertGreater(
+            result['avg_lightness'], 0.85,
+            f"Yellow palette should have high BT.709 lightness, got {result['avg_lightness']}"
+        )
+
+    def test_blue_palette_low_lightness(self):
+        """All-blue palette has low avg_lightness (BT.709 ≈ 0.07)."""
+        from variety.smart_selection.palette import calculate_palette_metrics
+
+        colors = {f'color{i}': '#0000FF' for i in range(16)}
+        result = calculate_palette_metrics(colors)
+
+        # BT.709: 0.2126*0 + 0.7152*0 + 0.0722*1 = 0.0722
+        self.assertLess(
+            result['avg_lightness'], 0.15,
+            f"Blue palette should have low BT.709 lightness, got {result['avg_lightness']}"
+        )
+
+    def test_yellow_vs_blue_discrimination(self):
+        """Yellow and blue palettes have drastically different avg_lightness.
+
+        With HSL, both would have L=0.5. With BT.709, yellow ≈ 0.93 and
+        blue ≈ 0.07 — a difference of ~0.86, not 0.00.
+        """
+        from variety.smart_selection.palette import calculate_palette_metrics
+
+        yellow = calculate_palette_metrics({f'color{i}': '#FFFF00' for i in range(16)})
+        blue = calculate_palette_metrics({f'color{i}': '#0000FF' for i in range(16)})
+
+        diff = yellow['avg_lightness'] - blue['avg_lightness']
+        self.assertGreater(
+            diff, 0.7,
+            f"Yellow-blue lightness gap should be >0.7 with BT.709, got {diff:.3f}. "
+            f"If ~0.0, HSL lightness is still being used."
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

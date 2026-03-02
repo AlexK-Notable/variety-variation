@@ -109,6 +109,9 @@ class PaletteRecord:
     avg_saturation: Optional[float] = None
     avg_lightness: Optional[float] = None
     color_temperature: Optional[float] = None
+    perceived_brightness: Optional[float] = None
+    brightness_p10: Optional[float] = None
+    brightness_p90: Optional[float] = None
     indexed_at: Optional[int] = None
 
     def to_dict(self, include_metrics: bool = False) -> Dict[str, str]:
@@ -119,7 +122,7 @@ class PaletteRecord:
 
         Args:
             include_metrics: If True, include avg_hue, avg_saturation,
-                            avg_lightness, color_temperature.
+                            avg_lightness, color_temperature, and brightness fields.
 
         Returns:
             Dict with non-None color keys and optionally metric keys.
@@ -134,7 +137,9 @@ class PaletteRecord:
             if value is not None:
                 result[key] = value
         if include_metrics:
-            for key in ('avg_hue', 'avg_saturation', 'avg_lightness', 'color_temperature'):
+            for key in ('avg_hue', 'avg_saturation', 'avg_lightness',
+                        'color_temperature', 'perceived_brightness',
+                        'brightness_p10', 'brightness_p90'):
                 value = getattr(self, key)
                 if value is not None:
                     result[key] = value
@@ -269,6 +274,15 @@ class SelectionConstraints:
         min_color_similarity: Minimum color similarity threshold (0-1).
             Only used when target_palette is set. Images with palettes
             below this similarity are excluded. Default is 0.5.
+        min_lightness: Minimum average lightness (0-1). Images darker than
+            this are excluded. Used by adaptive time-of-day mode to enforce
+            brightness floors (e.g. morning wants bright wallpapers).
+        max_lightness: Maximum average lightness (0-1). Images brighter than
+            this are excluded. Used by adaptive time-of-day mode to enforce
+            brightness ceilings (e.g. night wants dark wallpapers).
+        max_brightness_p90: Maximum 90th-percentile brightness (0-1). Rejects
+            images with bright regions even if median brightness is low.
+            Used by night mode to catch mostly-dark images with blinding spots.
         sources: List of source_ids to include (None = all sources).
         favorites_only: If True, only select from favorites.
     """
@@ -278,6 +292,9 @@ class SelectionConstraints:
     max_aspect_ratio: Optional[float] = None
     target_palette: Optional[Dict[str, Any]] = None
     min_color_similarity: Optional[float] = None
+    min_lightness: Optional[float] = None
+    max_lightness: Optional[float] = None
+    max_brightness_p90: Optional[float] = None
     sources: Optional[List[str]] = None
     favorites_only: bool = False
 

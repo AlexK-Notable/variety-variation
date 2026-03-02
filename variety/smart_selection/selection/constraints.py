@@ -183,14 +183,36 @@ class ConstraintApplier:
             # No palette data - exclude when color filtering
             return False
 
-        # Use HSL metrics for the hard filter. When comparing terminal/editor
-        # themes against photo wallpapers, aggregate metrics (avg hue, saturation,
-        # lightness, temperature) capture the "mood" match we want. OKLAB
-        # individual-color matching doesn't discriminate well here because
-        # theme ANSI colors and wallpaper extracted colors are fundamentally
-        # different — a blue theme and a warm sunset wallpaper can share
-        # several individual color pairs while having completely different moods.
         img_palette = palette_record.to_dict(include_metrics=True)
+
+        # Explicit brightness bounds — separate from color similarity.
+        # This handles time-of-day brightness requirements (e.g. dark wallpapers
+        # at night) independently from chromatic matching (hue/saturation).
+        # Prefer perceived_brightness (PIL pixel median) over avg_lightness
+        # (palette-based BT.709) for more accurate brightness filtering.
+        img_brightness = (
+            img_palette.get('perceived_brightness')
+            or img_palette.get('avg_lightness')
+        )
+        if img_brightness is not None:
+            if constraints.min_lightness is not None and img_brightness < constraints.min_lightness:
+                return False
+            if constraints.max_lightness is not None and img_brightness > constraints.max_lightness:
+                return False
+
+        # P90 brightness cap — rejects images with bright regions even if
+        # median brightness is low (e.g. mostly dark with a blinding sky).
+        max_p90 = getattr(constraints, 'max_brightness_p90', None)
+        if max_p90 is not None:
+            img_p90 = img_palette.get('brightness_p90')
+            if img_p90 is not None and img_p90 > max_p90:
+                return False
+
+        # Use HSL metrics for chromatic similarity. Lightness is nearly
+        # zeroed in the weights — we rely on the explicit bounds above for
+        # brightness filtering.  OKLAB individual-color matching doesn't
+        # discriminate well when comparing terminal/editor theme ANSI colors
+        # against photo wallpaper extracted colors.
         similarity = palette_similarity(
             constraints.target_palette, img_palette, use_oklab=False
         )

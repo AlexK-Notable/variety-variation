@@ -461,5 +461,192 @@ class TestConstraintApplierBatchLoading(unittest.TestCase):
             db.close()
 
 
+class TestBrightnessConstraints(unittest.TestCase):
+    """Tests for brightness-based constraint filtering.
+
+    Layer 3-4 of the luminance fix: constraints.py now uses
+    perceived_brightness (PIL pixel median) with fallback to avg_lightness,
+    and enforces max_brightness_p90 for night mode.
+    """
+
+    def setUp(self):
+        """Create temporary directory with test images and palettes."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test.db')
+        self.images_dir = os.path.join(self.temp_dir, 'images')
+        os.makedirs(self.images_dir)
+
+        # Create test images
+        self.dark_image = os.path.join(self.images_dir, 'dark.jpg')
+        img = Image.new('RGB', (100, 100), color='#1A1A1A')
+        img.save(self.dark_image)
+
+        self.bright_image = os.path.join(self.images_dir, 'bright.jpg')
+        img = Image.new('RGB', (100, 100), color='#E0E0E0')
+        img.save(self.bright_image)
+
+        self.mixed_image = os.path.join(self.images_dir, 'mixed.jpg')
+        img = Image.new('RGB', (100, 100), color='#404040')
+        img.save(self.mixed_image)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _populate_with_brightness_palettes(self, db):
+        """Add images with perceived_brightness and p90 data."""
+        from variety.smart_selection.indexer import ImageIndexer
+        from variety.smart_selection.models import PaletteRecord
+
+        indexer = ImageIndexer(db)
+        indexer.index_directory(self.images_dir)
+
+        # Dark image: low brightness, low P90
+        db.upsert_palette(PaletteRecord(
+            filepath=self.dark_image,
+            avg_lightness=0.10,
+            perceived_brightness=0.08,
+            brightness_p10=0.02,
+            brightness_p90=0.15,
+            avg_hue=0.0, avg_saturation=0.0, color_temperature=0.0,
+        ))
+
+        # Bright image: high brightness, high P90
+        db.upsert_palette(PaletteRecord(
+            filepath=self.bright_image,
+            avg_lightness=0.85,
+            perceived_brightness=0.88,
+            brightness_p10=0.75,
+            brightness_p90=0.95,
+            avg_hue=0.0, avg_saturation=0.0, color_temperature=0.0,
+        ))
+
+        # Mixed image: moderate brightness but high P90 (bright spots)
+        db.upsert_palette(PaletteRecord(
+            filepath=self.mixed_image,
+            avg_lightness=0.25,
+            perceived_brightness=0.22,
+            brightness_p10=0.05,
+            brightness_p90=0.80,  # Has bright spots despite low median
+            avg_hue=0.0, avg_saturation=0.0, color_temperature=0.0,
+        ))
+
+    def test_min_lightness_uses_perceived_brightness(self):
+        """min_lightness filters using perceived_brightness, not avg_lightness."""
+        from variety.smart_selection.selection.constraints import ConstraintApplier
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import SelectionConstraints
+
+        db = ImageDatabase(self.db_path)
+        try:
+            self._populate_with_brightness_palettes(db)
+            candidates = db.get_all_images()
+            applier = ConstraintApplier(db)
+
+            # min_lightness=0.5 should exclude dark (0.08) and mixed (0.22)
+            constraints = SelectionConstraints(
+                target_palette={'avg_hue': 0, 'avg_saturation': 0},
+                min_color_similarity=0.0,
+                min_lightness=0.5,
+            )
+            result = applier.apply(candidates, constraints)
+
+            filepaths = [img.filepath for img in result]
+            self.assertIn(self.bright_image, filepaths)
+            self.assertNotIn(self.dark_image, filepaths)
+            self.assertNotIn(self.mixed_image, filepaths)
+        finally:
+            db.close()
+
+    def test_max_lightness_uses_perceived_brightness(self):
+        """max_lightness filters using perceived_brightness, not avg_lightness."""
+        from variety.smart_selection.selection.constraints import ConstraintApplier
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import SelectionConstraints
+
+        db = ImageDatabase(self.db_path)
+        try:
+            self._populate_with_brightness_palettes(db)
+            candidates = db.get_all_images()
+            applier = ConstraintApplier(db)
+
+            # max_lightness=0.3 should exclude bright (0.88)
+            constraints = SelectionConstraints(
+                target_palette={'avg_hue': 0, 'avg_saturation': 0},
+                min_color_similarity=0.0,
+                max_lightness=0.3,
+            )
+            result = applier.apply(candidates, constraints)
+
+            filepaths = [img.filepath for img in result]
+            self.assertIn(self.dark_image, filepaths)
+            self.assertIn(self.mixed_image, filepaths)
+            self.assertNotIn(self.bright_image, filepaths)
+        finally:
+            db.close()
+
+    def test_p90_rejects_images_with_bright_spots(self):
+        """max_brightness_p90 rejects images with bright regions.
+
+        This is the night-mode use case: the mixed image has low median
+        brightness (0.22) but high P90 (0.80) from bright spots. Night
+        mode sets max_brightness_p90=0.70, which should catch it.
+        """
+        from variety.smart_selection.selection.constraints import ConstraintApplier
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import SelectionConstraints
+
+        db = ImageDatabase(self.db_path)
+        try:
+            self._populate_with_brightness_palettes(db)
+            candidates = db.get_all_images()
+            applier = ConstraintApplier(db)
+
+            # Night mode: dark wallpapers with no bright spots
+            constraints = SelectionConstraints(
+                target_palette={'avg_hue': 0, 'avg_saturation': 0},
+                min_color_similarity=0.0,
+                max_lightness=0.5,
+                max_brightness_p90=0.70,
+            )
+            result = applier.apply(candidates, constraints)
+
+            filepaths = [img.filepath for img in result]
+            # Dark image passes (P90=0.15, brightness=0.08)
+            self.assertIn(self.dark_image, filepaths)
+            # Mixed image excluded by P90 (P90=0.80 > 0.70)
+            self.assertNotIn(self.mixed_image, filepaths)
+            # Bright image excluded by max_lightness
+            self.assertNotIn(self.bright_image, filepaths)
+        finally:
+            db.close()
+
+    def test_p90_not_set_allows_bright_spots(self):
+        """Without max_brightness_p90, images with bright spots are allowed."""
+        from variety.smart_selection.selection.constraints import ConstraintApplier
+        from variety.smart_selection.database import ImageDatabase
+        from variety.smart_selection.models import SelectionConstraints
+
+        db = ImageDatabase(self.db_path)
+        try:
+            self._populate_with_brightness_palettes(db)
+            candidates = db.get_all_images()
+            applier = ConstraintApplier(db)
+
+            # No P90 constraint — mixed should pass max_lightness
+            constraints = SelectionConstraints(
+                target_palette={'avg_hue': 0, 'avg_saturation': 0},
+                min_color_similarity=0.0,
+                max_lightness=0.5,
+            )
+            result = applier.apply(candidates, constraints)
+
+            filepaths = [img.filepath for img in result]
+            self.assertIn(self.dark_image, filepaths)
+            self.assertIn(self.mixed_image, filepaths)  # Passes without P90 check
+        finally:
+            db.close()
+
+
 if __name__ == '__main__':
     unittest.main()

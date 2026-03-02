@@ -964,6 +964,118 @@ class TestColorAffinityInCalculateWeight(unittest.TestCase):
         self.assertGreater(w_with_target, w_no_target)
 
 
+class TestTimeAffinityPerceivedBrightness(unittest.TestCase):
+    """Tests that calculate_time_affinity prefers perceived_brightness.
+
+    Layer 3: when a PaletteRecord has perceived_brightness set, it should
+    be used instead of avg_lightness for the lightness component of time
+    affinity. This gives more accurate day/night selection based on actual
+    image pixel brightness rather than palette-derived BT.709 average.
+    """
+
+    def test_prefers_perceived_brightness_over_avg_lightness(self):
+        """Uses perceived_brightness when available, not avg_lightness."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        # Image where perceived_brightness (0.2 = dark) disagrees with
+        # avg_lightness (0.8 = bright). This can happen when a wallpaper
+        # has a few bright accent colors but is mostly dark.
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.8,
+            perceived_brightness=0.2,
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+
+        # Target wants dark (0.1) — should match perceived_brightness (0.2)
+        affinity_dark_target = calculate_time_affinity(
+            palette, target_lightness=0.1,
+            target_temperature=0.0, target_saturation=0.5,
+        )
+
+        # Target wants bright (0.9) — should NOT match perceived_brightness (0.2)
+        affinity_bright_target = calculate_time_affinity(
+            palette, target_lightness=0.9,
+            target_temperature=0.0, target_saturation=0.5,
+        )
+
+        # Dark target should score higher (perceived_brightness=0.2 is closer to 0.1)
+        self.assertGreater(
+            affinity_dark_target, affinity_bright_target,
+            f"Dark target ({affinity_dark_target:.3f}) should score higher than "
+            f"bright target ({affinity_bright_target:.3f}) for image with "
+            f"perceived_brightness=0.2 (avg_lightness=0.8 should be ignored)"
+        )
+
+    def test_falls_back_to_avg_lightness(self):
+        """Falls back to avg_lightness when perceived_brightness is None."""
+        from variety.smart_selection.weights import calculate_time_affinity
+        from variety.smart_selection.models import PaletteRecord
+
+        # No perceived_brightness — should use avg_lightness (0.8)
+        palette = PaletteRecord(
+            filepath='/test/img.jpg',
+            avg_lightness=0.8,
+            perceived_brightness=None,
+            color_temperature=0.0,
+            avg_saturation=0.5,
+        )
+
+        # Target wants bright (0.9) — should match avg_lightness (0.8)
+        affinity_bright_target = calculate_time_affinity(
+            palette, target_lightness=0.9,
+            target_temperature=0.0, target_saturation=0.5,
+        )
+
+        # Target wants dark (0.1) — should NOT match avg_lightness (0.8)
+        affinity_dark_target = calculate_time_affinity(
+            palette, target_lightness=0.1,
+            target_temperature=0.0, target_saturation=0.5,
+        )
+
+        # Bright target should score higher (using avg_lightness=0.8 fallback)
+        self.assertGreater(
+            affinity_bright_target, affinity_dark_target,
+            "Bright target should score higher with avg_lightness=0.8 fallback"
+        )
+
+
+class TestHexToLightnessIsBT709(unittest.TestCase):
+    """Tests that hex_to_lightness in weights.py uses BT.709.
+
+    This function was updated from HSL (max+min)/2 to BT.709.
+    Verifying it matches the palette.py hex_to_luminance function.
+    """
+
+    def test_yellow_bright_blue_dark(self):
+        """Yellow and blue have dramatically different lightness (not both 0.5)."""
+        from variety.smart_selection.weights import hex_to_lightness
+
+        yellow = hex_to_lightness('#FFFF00')
+        blue = hex_to_lightness('#0000FF')
+
+        self.assertGreater(yellow, 0.9, "Yellow should be >0.9 with BT.709")
+        self.assertLess(blue, 0.1, "Blue should be <0.1 with BT.709")
+
+    def test_matches_palette_hex_to_luminance(self):
+        """weights.hex_to_lightness matches palette.hex_to_luminance."""
+        from variety.smart_selection.weights import hex_to_lightness
+        from variety.smart_selection.palette import hex_to_luminance
+
+        test_colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00',
+                       '#FF00FF', '#00FFFF', '#808080', '#FFFFFF', '#000000']
+
+        for color in test_colors:
+            self.assertAlmostEqual(
+                hex_to_lightness(color),
+                hex_to_luminance(color),
+                places=6,
+                msg=f"Mismatch for {color}"
+            )
+
+
 class TestColorAffinityWithThemePalette(unittest.TestCase):
     """Tests for color_affinity_factor with theme-derived palette dicts.
 

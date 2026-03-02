@@ -132,6 +132,27 @@ def hsl_to_hex(h: float, s: float, l: float) -> str:
     return f"#{r_int:02x}{g_int:02x}{b_int:02x}"
 
 
+def hex_to_luminance(hex_color: str) -> float:
+    """Calculate BT.709 relative luminance from a hex color string.
+
+    Uses the ITU-R BT.709 standard: Y = 0.2126R + 0.7152G + 0.0722B.
+    This correctly models human brightness perception — green contributes
+    ~72% of perceived brightness, unlike HSL lightness which treats all
+    channels equally via (max+min)/2.
+
+    Args:
+        hex_color: Hex color string like "#FF0000" or "#ff0000".
+
+    Returns:
+        Luminance value from 0.0 (black) to 1.0 (white).
+    """
+    hex_color = hex_color.lstrip('#')
+    r = int(hex_color[0:2], 16) / 255.0
+    g = int(hex_color[2:4], 16) / 255.0
+    b = int(hex_color[4:6], 16) / 255.0
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
 def calculate_temperature(hue: float, saturation: float, lightness: float) -> float:
     """Calculate color temperature from HSL values.
 
@@ -214,9 +235,10 @@ def calculate_palette_metrics(colors: Dict[str, str]) -> Dict[str, float]:
         key = f'color{i}'
         if key in colors:
             h, s, l = hex_to_hsl(colors[key])
+            luminance = hex_to_luminance(colors[key])
             hues.append(h)
             saturations.append(s)
-            lightnesses.append(l)
+            lightnesses.append(luminance)  # BT.709, not HSL L
             temperatures.append(calculate_temperature(h, s, l))
 
     if not hues:
@@ -294,6 +316,44 @@ def parse_wallust_json(json_data) -> Dict[str, Any]:
     return result
 
 
+def _compute_perceived_brightness(image_path: str) -> Optional[Dict[str, float]]:
+    """Compute perceived brightness from image pixels using PIL.
+
+    Converts the image to grayscale (ITU-R BT.601 luminance) and computes
+    the median pixel value as the primary brightness signal, plus P10/P90
+    percentiles for range-based filtering.
+
+    Args:
+        image_path: Path to the image file.
+
+    Returns:
+        Dict with 'perceived_brightness', 'brightness_p10', 'brightness_p90'
+        (all 0.0-1.0), or None on failure.
+    """
+    try:
+        from PIL import Image, ImageStat
+        import numpy as np
+
+        img = Image.open(image_path)
+        img.thumbnail((256, 256))
+        gray = img.convert('L')  # ITU-R BT.601 luminance
+
+        stats = ImageStat.Stat(gray)
+        median_brightness = stats.median[0] / 255.0
+
+        pixels = np.array(gray).flatten()
+        p10 = float(np.percentile(pixels, 10)) / 255.0
+        p90 = float(np.percentile(pixels, 90)) / 255.0
+
+        return {
+            'perceived_brightness': median_brightness,
+            'brightness_p10': p10,
+            'brightness_p90': p90,
+        }
+    except Exception:
+        return None
+
+
 def _extract_palette_isolated(args: Tuple[str, str, str]) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Extract palette in an isolated cache environment (process-safe).
 
@@ -358,7 +418,12 @@ def _extract_palette_isolated(args: Tuple[str, str, str]) -> Tuple[str, Optional
                         filepath = os.path.join(entry_path, subfile)
                         with open(filepath, 'r') as f:
                             json_data = json.load(f)
-                        return (image_path, parse_wallust_json(json_data))
+                        result = parse_wallust_json(json_data)
+                        # Add PIL-based brightness from actual pixels
+                        brightness = _compute_perceived_brightness(image_path)
+                        if brightness:
+                            result.update(brightness)
+                        return (image_path, result)
 
         return (image_path, None)
 
@@ -469,11 +534,9 @@ class PaletteExtractor:
                 r = rgb.get('red', 0)
                 g = rgb.get('green', 0)
                 b = rgb.get('blue', 0)
-                # HSL lightness = (max + min) / 2
-                max_c = max(r, g, b)
-                min_c = min(r, g, b)
-                lightness = (max_c + min_c) / 2.0
-                lightnesses.append(lightness)
+                # BT.709 relative luminance (perceptually accurate)
+                luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                lightnesses.append(luminance)
 
         if lightnesses:
             return sum(lightnesses) / len(lightnesses)
@@ -599,6 +662,11 @@ class PaletteExtractor:
                             result['avg_lightness'] = raw_lightness
                     except Exception as e:
                         logger.debug(f"Could not read raw palette: {e}")
+
+                # Add PIL-based perceived brightness from actual pixels
+                brightness = _compute_perceived_brightness(image_path)
+                if brightness:
+                    result.update(brightness)
 
                 return result
 
@@ -846,6 +914,9 @@ def create_palette_record(filepath: str, palette_data: Dict[str, Any]) -> Palett
         avg_saturation=palette_data.get('avg_saturation'),
         avg_lightness=palette_data.get('avg_lightness'),
         color_temperature=palette_data.get('color_temperature'),
+        perceived_brightness=palette_data.get('perceived_brightness'),
+        brightness_p10=palette_data.get('brightness_p10'),
+        brightness_p90=palette_data.get('brightness_p90'),
         indexed_at=int(time.time()),
     )
 
@@ -897,12 +968,16 @@ def palette_similarity_hsl(palette1: Dict[str, Any], palette2: Dict[str, Any]) -
     temp2 = palette2.get('color_temperature') if palette2.get('color_temperature') is not None else 0
     temp_similarity = 1 - (abs(temp1 - temp2) / 2.0)  # Range is -1 to 1
 
-    # Weighted average (hue and lightness are most perceptually important)
+    # Weighted average — chromatic focus.
+    # Lightness is nearly zeroed out because theme lightness (e.g. dark terminal
+    # ANSI colors) should NOT dictate wallpaper brightness.  Brightness filtering
+    # is handled separately via explicit min/max_lightness bounds on
+    # SelectionConstraints.
     weights = {
-        'hue': 0.35,
-        'saturation': 0.15,
-        'lightness': 0.35,
-        'temperature': 0.15,
+        'hue': 0.45,
+        'saturation': 0.20,
+        'lightness': 0.05,
+        'temperature': 0.30,
     }
 
     similarity = (

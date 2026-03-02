@@ -35,7 +35,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -200,6 +200,7 @@ class ImageDatabase:
             6: self._migrate_v5_to_v6,
             7: self._migrate_v6_to_v7,
             8: self._migrate_v7_to_v8,
+            9: self._migrate_v8_to_v9,
         }
 
         with self._lock:
@@ -509,6 +510,32 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info("Migration v7→v8: Color themes table created")
+
+    def _migrate_v8_to_v9(self):
+        """Migrate schema from v8 to v9.
+
+        Adds perceived_brightness, brightness_p10, brightness_p90 columns
+        to the palettes table for PIL-based perceptual brightness data.
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            'ALTER TABLE palettes ADD COLUMN perceived_brightness REAL'
+        )
+        cursor.execute(
+            'ALTER TABLE palettes ADD COLUMN brightness_p10 REAL'
+        )
+        cursor.execute(
+            'ALTER TABLE palettes ADD COLUMN brightness_p90 REAL'
+        )
+
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_palettes_brightness '
+            'ON palettes(perceived_brightness)'
+        )
+
+        self.conn.commit()
+        logger.info("Migration v8→v9: Added perceived_brightness columns to palettes")
 
     def close(self):
         """Close the database connection.
@@ -1050,8 +1077,9 @@ class ImageDatabase:
                     filepath, color0, color1, color2, color3, color4, color5, color6, color7,
                     color8, color9, color10, color11, color12, color13, color14, color15,
                     background, foreground, cursor, avg_hue, avg_saturation, avg_lightness,
-                    color_temperature, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    color_temperature, perceived_brightness, brightness_p10, brightness_p90,
+                    indexed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     color0 = excluded.color0, color1 = excluded.color1,
                     color2 = excluded.color2, color3 = excluded.color3,
@@ -1066,6 +1094,9 @@ class ImageDatabase:
                     avg_hue = excluded.avg_hue, avg_saturation = excluded.avg_saturation,
                     avg_lightness = excluded.avg_lightness,
                     color_temperature = excluded.color_temperature,
+                    perceived_brightness = excluded.perceived_brightness,
+                    brightness_p10 = excluded.brightness_p10,
+                    brightness_p90 = excluded.brightness_p90,
                     indexed_at = excluded.indexed_at
             ''', (
                 record.filepath,
@@ -1075,7 +1106,8 @@ class ImageDatabase:
                 record.color12, record.color13, record.color14, record.color15,
                 record.background, record.foreground, record.cursor,
                 record.avg_hue, record.avg_saturation, record.avg_lightness,
-                record.color_temperature, record.indexed_at,
+                record.color_temperature, record.perceived_brightness,
+                record.brightness_p10, record.brightness_p90, record.indexed_at,
             ))
             self.conn.commit()
 
@@ -1094,23 +1126,7 @@ class ImageDatabase:
             row = cursor.fetchone()
             if row is None:
                 return None
-            return PaletteRecord(
-                filepath=row['filepath'],
-                color0=row['color0'], color1=row['color1'],
-                color2=row['color2'], color3=row['color3'],
-                color4=row['color4'], color5=row['color5'],
-                color6=row['color6'], color7=row['color7'],
-                color8=row['color8'], color9=row['color9'],
-                color10=row['color10'], color11=row['color11'],
-                color12=row['color12'], color13=row['color13'],
-                color14=row['color14'], color15=row['color15'],
-                background=row['background'], foreground=row['foreground'],
-                cursor=row['cursor'],
-                avg_hue=row['avg_hue'], avg_saturation=row['avg_saturation'],
-                avg_lightness=row['avg_lightness'],
-                color_temperature=row['color_temperature'],
-                indexed_at=row['indexed_at'],
-            )
+            return self._row_to_palette_record(row)
 
     def get_images_with_palettes(self) -> List[ImageRecord]:
         """Get images that have palette data.
@@ -1169,26 +1185,7 @@ class ImageDatabase:
                 INNER JOIN images i ON p.filepath = i.filepath
                 WHERE i.stale_at IS NULL
             ''')
-            results = []
-            for row in cursor.fetchall():
-                results.append(PaletteRecord(
-                    filepath=row['filepath'],
-                    color0=row['color0'], color1=row['color1'],
-                    color2=row['color2'], color3=row['color3'],
-                    color4=row['color4'], color5=row['color5'],
-                    color6=row['color6'], color7=row['color7'],
-                    color8=row['color8'], color9=row['color9'],
-                    color10=row['color10'], color11=row['color11'],
-                    color12=row['color12'], color13=row['color13'],
-                    color14=row['color14'], color15=row['color15'],
-                    background=row['background'], foreground=row['foreground'],
-                    cursor=row['cursor'],
-                    avg_hue=row['avg_hue'], avg_saturation=row['avg_saturation'],
-                    avg_lightness=row['avg_lightness'],
-                    color_temperature=row['color_temperature'],
-                    indexed_at=row['indexed_at'],
-                ))
-            return results
+            return [self._row_to_palette_record(row) for row in cursor.fetchall()]
 
     def get_palettes_by_filepaths(self, filepaths: List[str]) -> Dict[str, PaletteRecord]:
         """Get multiple palette records by their filepaths.
@@ -1236,6 +1233,9 @@ class ImageDatabase:
             avg_hue=row['avg_hue'], avg_saturation=row['avg_saturation'],
             avg_lightness=row['avg_lightness'],
             color_temperature=row['color_temperature'],
+            perceived_brightness=row['perceived_brightness'],
+            brightness_p10=row['brightness_p10'],
+            brightness_p90=row['brightness_p90'],
             indexed_at=row['indexed_at'],
         )
 
@@ -1258,8 +1258,9 @@ class ImageDatabase:
                     filepath, color0, color1, color2, color3, color4, color5, color6, color7,
                     color8, color9, color10, color11, color12, color13, color14, color15,
                     background, foreground, cursor, avg_hue, avg_saturation, avg_lightness,
-                    color_temperature, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    color_temperature, perceived_brightness, brightness_p10, brightness_p90,
+                    indexed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     color0 = excluded.color0, color1 = excluded.color1,
                     color2 = excluded.color2, color3 = excluded.color3,
@@ -1274,6 +1275,9 @@ class ImageDatabase:
                     avg_hue = excluded.avg_hue, avg_saturation = excluded.avg_saturation,
                     avg_lightness = excluded.avg_lightness,
                     color_temperature = excluded.color_temperature,
+                    perceived_brightness = excluded.perceived_brightness,
+                    brightness_p10 = excluded.brightness_p10,
+                    brightness_p90 = excluded.brightness_p90,
                     indexed_at = excluded.indexed_at
             ''', [
                 (
@@ -1284,7 +1288,8 @@ class ImageDatabase:
                     r.color12, r.color13, r.color14, r.color15,
                     r.background, r.foreground, r.cursor,
                     r.avg_hue, r.avg_saturation, r.avg_lightness,
-                    r.color_temperature, r.indexed_at,
+                    r.color_temperature, r.perceived_brightness,
+                    r.brightness_p10, r.brightness_p90, r.indexed_at,
                 )
                 for r in records
             ])
@@ -2506,10 +2511,14 @@ class ImageDatabase:
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT
-                    SUM(CASE WHEN avg_lightness >= 0.00 AND avg_lightness < 0.25 THEN 1 ELSE 0 END) as dark,
-                    SUM(CASE WHEN avg_lightness >= 0.25 AND avg_lightness < 0.50 THEN 1 ELSE 0 END) as medium_dark,
-                    SUM(CASE WHEN avg_lightness >= 0.50 AND avg_lightness < 0.75 THEN 1 ELSE 0 END) as medium_light,
-                    SUM(CASE WHEN avg_lightness >= 0.75 AND avg_lightness <= 1.00 THEN 1 ELSE 0 END) as light
+                    SUM(CASE WHEN COALESCE(perceived_brightness, avg_lightness) >= 0.00
+                              AND COALESCE(perceived_brightness, avg_lightness) < 0.25 THEN 1 ELSE 0 END) as dark,
+                    SUM(CASE WHEN COALESCE(perceived_brightness, avg_lightness) >= 0.25
+                              AND COALESCE(perceived_brightness, avg_lightness) < 0.50 THEN 1 ELSE 0 END) as medium_dark,
+                    SUM(CASE WHEN COALESCE(perceived_brightness, avg_lightness) >= 0.50
+                              AND COALESCE(perceived_brightness, avg_lightness) < 0.75 THEN 1 ELSE 0 END) as medium_light,
+                    SUM(CASE WHEN COALESCE(perceived_brightness, avg_lightness) >= 0.75
+                              AND COALESCE(perceived_brightness, avg_lightness) <= 1.00 THEN 1 ELSE 0 END) as light
                 FROM palettes p
                 INNER JOIN images i ON p.filepath = i.filepath
                 WHERE i.stale_at IS NULL
@@ -2621,11 +2630,11 @@ class ImageDatabase:
         """
         with self._lock:
             cursor = self.conn.cursor()
-            # day-suitable = lightness >= 0.5, night-suitable = lightness < 0.5
+            # day-suitable = brightness >= threshold, night-suitable = brightness < threshold
             cursor.execute('''
                 SELECT
-                    SUM(CASE WHEN avg_lightness >= ? THEN 1 ELSE 0 END) as day_suitable,
-                    SUM(CASE WHEN avg_lightness < ? THEN 1 ELSE 0 END) as night_suitable
+                    SUM(CASE WHEN COALESCE(perceived_brightness, avg_lightness) >= ? THEN 1 ELSE 0 END) as day_suitable,
+                    SUM(CASE WHEN COALESCE(perceived_brightness, avg_lightness) < ? THEN 1 ELSE 0 END) as night_suitable
                 FROM palettes p
                 INNER JOIN images i ON p.filepath = i.filepath
                 WHERE i.stale_at IS NULL
