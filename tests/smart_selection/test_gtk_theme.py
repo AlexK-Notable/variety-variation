@@ -231,30 +231,19 @@ class TestGsettingsInAllowlist(unittest.TestCase):
 
 
 class TestGtkDynamicReloadCommand(unittest.TestCase):
-    """DEFAULT_RELOADS has correct entries for gtk3-dynamic and gtk4-dynamic."""
+    """GTK dynamic theme reload is handled by _reload_gtk_theme() toggle."""
 
-    def test_gtk_dynamic_reload_command(self):
-        """DEFAULT_RELOADS has correct entries for gtk3-dynamic and gtk4-dynamic."""
-        # Both keys must exist
+    def test_gtk_dynamic_reload_is_none(self):
+        """gtk3-dynamic and gtk4-dynamic have None reload commands.
+
+        Reload is handled by ThemeEngine._reload_gtk_theme() which toggles
+        the gsettings theme to force GTK apps to re-read CSS. A simple
+        gsettings set to the same value is a no-op.
+        """
         self.assertIn('gtk3-dynamic', DEFAULT_RELOADS)
         self.assertIn('gtk4-dynamic', DEFAULT_RELOADS)
-
-        # Commands must use gsettings to set the GTK theme
-        gtk3_cmd = DEFAULT_RELOADS['gtk3-dynamic']
-        gtk4_cmd = DEFAULT_RELOADS['gtk4-dynamic']
-
-        self.assertIsNotNone(gtk3_cmd)
-        self.assertIsNotNone(gtk4_cmd)
-
-        # Must reference gsettings and the Variety-Dynamic theme name
-        self.assertIn('gsettings', gtk3_cmd)
-        self.assertIn('Variety-Dynamic', gtk3_cmd)
-        self.assertIn('gsettings', gtk4_cmd)
-        self.assertIn('Variety-Dynamic', gtk4_cmd)
-
-        # Must reference the gtk-theme key
-        self.assertIn('gtk-theme', gtk3_cmd)
-        self.assertIn('gtk-theme', gtk4_cmd)
+        self.assertIsNone(DEFAULT_RELOADS['gtk3-dynamic'])
+        self.assertIsNone(DEFAULT_RELOADS['gtk4-dynamic'])
 
     def test_gtk_static_reloads_are_none(self):
         """Static gtk3/gtk4 entries have None reload (apps pick up on next open)."""

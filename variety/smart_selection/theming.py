@@ -406,9 +406,10 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     # GTK (apps pick up on next window open)
     "gtk3": None,
     "gtk4": None,
-    # GTK dynamic theme (gsettings toggle forces reload)
-    "gtk3-dynamic": "gsettings set org.gnome.desktop.interface gtk-theme Variety-Dynamic",
-    "gtk4-dynamic": "gsettings set org.gnome.desktop.interface gtk-theme Variety-Dynamic",
+    # GTK dynamic theme: reload handled by _reload_gtk_theme() toggle,
+    # not via simple gsettings set (which is a no-op if theme unchanged).
+    "gtk3-dynamic": None,
+    "gtk4-dynamic": None,
 
     # Qt theming
     "qt5ct": None,      # Apps pick up on next launch
@@ -954,6 +955,38 @@ class ThemeEngine:
         self._reload_thread = threading.Thread(target=runner, daemon=True)
         self._reload_thread.start()
 
+    def _reload_gtk_theme(self) -> None:
+        """Force GTK apps to reload by toggling the theme.
+
+        Simply re-setting the same theme via gsettings is a no-op because
+        GSettings doesn't emit notify when the value hasn't changed.
+        Toggling to an empty string and back forces all GTK apps
+        (including Variety itself) to reload their CSS.
+        """
+        try:
+            current = subprocess.run(
+                ["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"],
+                capture_output=True, timeout=5, text=True,
+            )
+            theme = current.stdout.strip().strip("'")
+            if not theme:
+                return
+
+            # Toggle away
+            subprocess.run(
+                ["gsettings", "set", "org.gnome.desktop.interface", "gtk-theme", ""],
+                timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.05)
+            # Toggle back
+            subprocess.run(
+                ["gsettings", "set", "org.gnome.desktop.interface", "gtk-theme", theme],
+                timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            logger.debug(f"GTK theme reloaded via toggle: {theme}")
+        except Exception as e:
+            logger.warning(f"Failed to reload GTK theme: {e}")
+
     def shutdown(self, timeout: float = 2.0) -> None:
         """Wait for pending reload commands on shutdown.
 
@@ -1063,6 +1096,7 @@ class ThemeEngine:
         processor = TemplateProcessor(palette)
         success_count = 0
         reload_commands: List[Tuple[str, str]] = []
+        gtk_dynamic_written = False
 
         for config in self._templates:
             if not config.enabled:
@@ -1083,12 +1117,21 @@ class ThemeEngine:
             # Write to target
             if self._write_atomic(config.target_path, output):
                 success_count += 1
+                if config.name in ("gtk3-dynamic", "gtk4-dynamic"):
+                    gtk_dynamic_written = True
                 if config.reload_command:
                     reload_commands.append((config.name, config.reload_command))
 
         # Run reload commands asynchronously
-        if reload_commands:
-            self._run_reload_commands_async(reload_commands)
+        if reload_commands or gtk_dynamic_written:
+            def _reload_all():
+                for name, command in reload_commands:
+                    self._run_reload_command(command, name)
+                if gtk_dynamic_written:
+                    self._reload_gtk_theme()
+
+            thread = threading.Thread(target=_reload_all, daemon=True)
+            thread.start()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(
@@ -1123,6 +1166,7 @@ class ThemeEngine:
         processor = TemplateProcessor(palette)
         success_count = 0
         reload_commands: List[Tuple[str, str]] = []
+        gtk_dynamic_written = False
 
         for config in self._templates:
             if not config.enabled:
@@ -1140,11 +1184,20 @@ class ThemeEngine:
 
             if self._write_atomic(config.target_path, output):
                 success_count += 1
+                if config.name in ("gtk3-dynamic", "gtk4-dynamic"):
+                    gtk_dynamic_written = True
                 if config.reload_command:
                     reload_commands.append((config.name, config.reload_command))
 
-        if reload_commands:
-            self._run_reload_commands_async(reload_commands)
+        if reload_commands or gtk_dynamic_written:
+            def _reload_all():
+                for name, command in reload_commands:
+                    self._run_reload_command(command, name)
+                if gtk_dynamic_written:
+                    self._reload_gtk_theme()
+
+            thread = threading.Thread(target=_reload_all, daemon=True)
+            thread.start()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(
