@@ -15,22 +15,19 @@ from variety.smart_selection.palette import palette_similarity
 
 
 def hex_to_lightness(hex_color: str) -> float:
-    """Calculate BT.709 relative luminance from a hex color string.
+    """Calculate perceptual lightness using OKLAB L.
 
-    Uses the ITU-R BT.709 standard: Y = 0.2126R + 0.7152G + 0.0722B.
-    This correctly models human brightness perception.
+    OKLAB L is perceptually uniform: equal numeric differences correspond
+    to equal perceived brightness differences.
 
     Args:
         hex_color: Hex color string like "#FF0000" or "#ff0000".
 
     Returns:
-        Luminance value from 0.0 (black) to 1.0 (white).
+        OKLAB lightness from 0.0 (black) to 1.0 (white).
     """
-    hex_color = hex_color.lstrip('#')
-    r = int(hex_color[0:2], 16) / 255.0
-    g = int(hex_color[2:4], 16) / 255.0
-    b = int(hex_color[4:6], 16) / 255.0
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    from variety.smart_selection.color_science import get_oklab_lightness
+    return get_oklab_lightness(hex_color)
 
 
 def recency_factor(

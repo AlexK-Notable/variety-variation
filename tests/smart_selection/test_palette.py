@@ -905,12 +905,11 @@ class TestCalculatePaletteMetrics(unittest.TestCase):
 
 
 class TestHexToLuminance(unittest.TestCase):
-    """Tests for hex_to_luminance BT.709 relative luminance.
+    """Tests for hex_to_luminance using OKLAB perceptual lightness.
 
-    BT.709 formula: Y = 0.2126R + 0.7152G + 0.0722B
-    This is the core fix for perceptual luminance — HSL lightness treats
-    all channels equally ((max+min)/2), giving yellow and blue the same
-    L=0.5 even though yellow looks much brighter.
+    OKLAB L is perceptually uniform: equal numeric differences correspond
+    to equal perceived brightness differences. Unlike BT.709 or HSL,
+    #808080 maps to ~0.60 (perceptual mid-gray), not 0.50.
     """
 
     def test_import_hex_to_luminance(self):
@@ -919,37 +918,33 @@ class TestHexToLuminance(unittest.TestCase):
         self.assertIsNotNone(hex_to_luminance)
 
     def test_black_is_zero(self):
-        """Black (#000000) has luminance 0.0."""
+        """Black (#000000) has lightness 0.0."""
         from variety.smart_selection.palette import hex_to_luminance
         self.assertAlmostEqual(hex_to_luminance('#000000'), 0.0, places=4)
 
     def test_white_is_one(self):
-        """White (#FFFFFF) has luminance 1.0."""
+        """White (#FFFFFF) has lightness 1.0."""
         from variety.smart_selection.palette import hex_to_luminance
         self.assertAlmostEqual(hex_to_luminance('#FFFFFF'), 1.0, places=4)
 
     def test_yellow_much_brighter_than_blue(self):
         """Yellow (#FFFF00) is perceptually much brighter than blue (#0000FF).
 
-        This is THE key test — the whole reason for switching from HSL to BT.709.
-        HSL gives both L=0.5, but BT.709 correctly gives yellow ~0.93
-        and blue ~0.07, matching human perception.
+        OKLAB correctly separates yellow (~0.97) from blue (~0.45),
+        matching human perception. HSL gives both L=0.5.
         """
         from variety.smart_selection.palette import hex_to_luminance
 
         yellow = hex_to_luminance('#FFFF00')
         blue = hex_to_luminance('#0000FF')
 
-        # Yellow should be at least 10x brighter than blue
         self.assertGreater(yellow, 0.9, f"Yellow should be very bright, got {yellow}")
-        self.assertLess(blue, 0.1, f"Blue should be very dark, got {blue}")
-        self.assertGreater(yellow / blue, 10, "Yellow should be >10x brighter than blue")
+        self.assertLess(blue, 0.5, f"Blue should be below mid-brightness, got {blue}")
+        self.assertGreater(yellow, blue, "Yellow should be brighter than blue")
 
     def test_green_brighter_than_red(self):
-        """Green contributes most to perceived brightness (71.52% in BT.709).
-
-        Green (#00FF00) should be significantly brighter than red (#FF0000),
-        which should be brighter than blue (#0000FF).
+        """Green (#00FF00) should be brighter than red (#FF0000),
+        which should be brighter than blue (#0000FF) in OKLAB.
         """
         from variety.smart_selection.palette import hex_to_luminance
 
@@ -959,18 +954,18 @@ class TestHexToLuminance(unittest.TestCase):
 
         self.assertGreater(green, red, "Green should be brighter than red")
         self.assertGreater(red, blue, "Red should be brighter than blue")
-        # BT.709 coefficients: G=0.7152, R=0.2126, B=0.0722
-        self.assertAlmostEqual(green, 0.7152, places=3)
-        self.assertAlmostEqual(red, 0.2126, places=3)
-        self.assertAlmostEqual(blue, 0.0722, places=3)
+        # OKLAB L values: green ≈ 0.87, red ≈ 0.63, blue ≈ 0.45
+        self.assertAlmostEqual(green, 0.866, places=2)
+        self.assertAlmostEqual(red, 0.628, places=2)
+        self.assertAlmostEqual(blue, 0.452, places=2)
 
     def test_50_percent_gray(self):
-        """50% gray (#808080) should be ~0.50 luminance (channel-independent)."""
+        """50% gray (#808080) should be ~0.60 in OKLAB (perceptual mid-gray)."""
         from variety.smart_selection.palette import hex_to_luminance
 
         gray = hex_to_luminance('#808080')
-        # 128/255 * (0.2126 + 0.7152 + 0.0722) = 128/255 ≈ 0.502
-        self.assertAlmostEqual(gray, 128 / 255.0, places=2)
+        # OKLAB L for #808080 ≈ 0.60 (perceptual mid-gray, not linear 0.50)
+        self.assertAlmostEqual(gray, 0.60, places=1)
 
     def test_lowercase_hex(self):
         """Handles lowercase hex input."""
@@ -980,12 +975,26 @@ class TestHexToLuminance(unittest.TestCase):
         lower = hex_to_luminance('#ff0000')
         self.assertAlmostEqual(upper, lower, places=6)
 
+    def test_matches_color_science_get_oklab_lightness(self):
+        """hex_to_luminance delegates to get_oklab_lightness correctly."""
+        from variety.smart_selection.palette import hex_to_luminance
+        from variety.smart_selection.color_science import get_oklab_lightness
+
+        test_colors = ['#FF0000', '#00FF00', '#0000FF', '#808080', '#FFFFFF', '#000000']
+        for color in test_colors:
+            self.assertAlmostEqual(
+                hex_to_luminance(color),
+                get_oklab_lightness(color),
+                places=6,
+                msg=f"Mismatch for {color}",
+            )
+
 
 class TestComputePerceivedBrightness(unittest.TestCase):
-    """Tests for _compute_perceived_brightness PIL-based brightness.
+    """Tests for _compute_perceived_brightness OKLAB-based brightness.
 
-    This function converts an image to grayscale (BT.601), computes
-    median brightness plus P10/P90 percentiles for range detection.
+    This function computes OKLAB L per pixel, then takes the median
+    plus P10/P90 percentiles for range detection.
     """
 
     def setUp(self):
@@ -1016,8 +1025,9 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         result = _compute_perceived_brightness(path)
 
         self.assertIsNotNone(result)
-        self.assertLess(result['perceived_brightness'], 0.1)
-        self.assertLess(result['brightness_p90'], 0.1)
+        # OKLAB L for #0A0A0A ≈ 0.145
+        self.assertLess(result['perceived_brightness'], 0.2)
+        self.assertLess(result['brightness_p90'], 0.2)
 
     def test_bright_image_high_brightness(self):
         """Near-white image has very high perceived brightness."""
@@ -1056,8 +1066,8 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         self.assertLess(result['perceived_brightness'], 0.3)
         # P90 should be high (30% bright pixels means P90 lands in bright area)
         self.assertGreater(result['brightness_p90'], 0.5)
-        # P10 should be low (darkest 10% is very dark)
-        self.assertLess(result['brightness_p10'], 0.1)
+        # P10 should be low (darkest 10% is very dark, OKLAB L ≈ 0.145 for #0A0A0A)
+        self.assertLess(result['brightness_p10'], 0.2)
 
     def test_returns_all_three_keys(self):
         """Result dict contains perceived_brightness, brightness_p10, brightness_p90."""
@@ -1107,45 +1117,49 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class TestBT709InPaletteMetrics(unittest.TestCase):
-    """Tests that calculate_palette_metrics uses BT.709 for avg_lightness.
+class TestOKLABInPaletteMetrics(unittest.TestCase):
+    """Tests that calculate_palette_metrics uses OKLAB L for avg_lightness.
 
-    After our change, avg_lightness should reflect BT.709 luminance,
-    not HSL lightness. This means yellow palettes are bright and blue
-    palettes are dark — matching human perception.
+    avg_lightness should reflect OKLAB perceptual lightness, not HSL
+    lightness. Yellow palettes are bright (~0.97) and blue palettes are
+    moderate (~0.45) — matching human perception, with perceptual uniformity.
     """
 
     def test_yellow_palette_high_lightness(self):
-        """All-yellow palette has high avg_lightness (BT.709 ≈ 0.93)."""
+        """All-yellow palette has high avg_lightness (OKLAB ≈ 0.97)."""
         from variety.smart_selection.palette import calculate_palette_metrics
 
         colors = {f'color{i}': '#FFFF00' for i in range(16)}
         result = calculate_palette_metrics(colors)
 
-        # BT.709: 0.2126*1 + 0.7152*1 + 0.0722*0 = 0.9278
+        # OKLAB L for yellow ≈ 0.968
         self.assertGreater(
-            result['avg_lightness'], 0.85,
-            f"Yellow palette should have high BT.709 lightness, got {result['avg_lightness']}"
+            result['avg_lightness'], 0.9,
+            f"Yellow palette should have high OKLAB lightness, got {result['avg_lightness']}"
         )
 
-    def test_blue_palette_low_lightness(self):
-        """All-blue palette has low avg_lightness (BT.709 ≈ 0.07)."""
+    def test_blue_palette_moderate_lightness(self):
+        """All-blue palette has moderate avg_lightness (OKLAB ≈ 0.45)."""
         from variety.smart_selection.palette import calculate_palette_metrics
 
         colors = {f'color{i}': '#0000FF' for i in range(16)}
         result = calculate_palette_metrics(colors)
 
-        # BT.709: 0.2126*0 + 0.7152*0 + 0.0722*1 = 0.0722
+        # OKLAB L for blue ≈ 0.452
         self.assertLess(
-            result['avg_lightness'], 0.15,
-            f"Blue palette should have low BT.709 lightness, got {result['avg_lightness']}"
+            result['avg_lightness'], 0.5,
+            f"Blue palette should be below mid-brightness in OKLAB, got {result['avg_lightness']}"
+        )
+        self.assertGreater(
+            result['avg_lightness'], 0.3,
+            f"Blue palette shouldn't be near-black in OKLAB, got {result['avg_lightness']}"
         )
 
     def test_yellow_vs_blue_discrimination(self):
-        """Yellow and blue palettes have drastically different avg_lightness.
+        """Yellow and blue palettes have different avg_lightness.
 
-        With HSL, both would have L=0.5. With BT.709, yellow ≈ 0.93 and
-        blue ≈ 0.07 — a difference of ~0.86, not 0.00.
+        With HSL, both would have L=0.5. With OKLAB, yellow ≈ 0.97 and
+        blue ≈ 0.45 — a difference of ~0.52.
         """
         from variety.smart_selection.palette import calculate_palette_metrics
 
@@ -1154,8 +1168,8 @@ class TestBT709InPaletteMetrics(unittest.TestCase):
 
         diff = yellow['avg_lightness'] - blue['avg_lightness']
         self.assertGreater(
-            diff, 0.7,
-            f"Yellow-blue lightness gap should be >0.7 with BT.709, got {diff:.3f}. "
+            diff, 0.4,
+            f"Yellow-blue lightness gap should be >0.4 with OKLAB, got {diff:.3f}. "
             f"If ~0.0, HSL lightness is still being used."
         )
 

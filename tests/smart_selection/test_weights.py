@@ -1042,22 +1042,22 @@ class TestTimeAffinityPerceivedBrightness(unittest.TestCase):
         )
 
 
-class TestHexToLightnessIsBT709(unittest.TestCase):
-    """Tests that hex_to_lightness in weights.py uses BT.709.
+class TestHexToLightnessIsOKLAB(unittest.TestCase):
+    """Tests that hex_to_lightness in weights.py uses OKLAB L.
 
-    This function was updated from HSL (max+min)/2 to BT.709.
-    Verifying it matches the palette.py hex_to_luminance function.
+    Both hex_to_lightness (weights) and hex_to_luminance (palette)
+    delegate to get_oklab_lightness from color_science.
     """
 
-    def test_yellow_bright_blue_dark(self):
+    def test_yellow_bright_blue_below_mid(self):
         """Yellow and blue have dramatically different lightness (not both 0.5)."""
         from variety.smart_selection.weights import hex_to_lightness
 
         yellow = hex_to_lightness('#FFFF00')
         blue = hex_to_lightness('#0000FF')
 
-        self.assertGreater(yellow, 0.9, "Yellow should be >0.9 with BT.709")
-        self.assertLess(blue, 0.1, "Blue should be <0.1 with BT.709")
+        self.assertGreater(yellow, 0.9, "Yellow should be >0.9 with OKLAB")
+        self.assertLess(blue, 0.5, "Blue should be <0.5 with OKLAB")
 
     def test_matches_palette_hex_to_luminance(self):
         """weights.hex_to_lightness matches palette.hex_to_luminance."""
@@ -1071,6 +1071,21 @@ class TestHexToLightnessIsBT709(unittest.TestCase):
             self.assertAlmostEqual(
                 hex_to_lightness(color),
                 hex_to_luminance(color),
+                places=6,
+                msg=f"Mismatch for {color}"
+            )
+
+    def test_matches_get_oklab_lightness(self):
+        """weights.hex_to_lightness matches color_science.get_oklab_lightness."""
+        from variety.smart_selection.weights import hex_to_lightness
+        from variety.smart_selection.color_science import get_oklab_lightness
+
+        test_colors = ['#FF0000', '#00FF00', '#0000FF', '#808080', '#FFFFFF', '#000000']
+
+        for color in test_colors:
+            self.assertAlmostEqual(
+                hex_to_lightness(color),
+                get_oklab_lightness(color),
                 places=6,
                 msg=f"Mismatch for {color}"
             )

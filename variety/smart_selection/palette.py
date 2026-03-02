@@ -133,24 +133,20 @@ def hsl_to_hex(h: float, s: float, l: float) -> str:
 
 
 def hex_to_luminance(hex_color: str) -> float:
-    """Calculate BT.709 relative luminance from a hex color string.
+    """Calculate perceptual lightness using OKLAB L.
 
-    Uses the ITU-R BT.709 standard: Y = 0.2126R + 0.7152G + 0.0722B.
-    This correctly models human brightness perception — green contributes
-    ~72% of perceived brightness, unlike HSL lightness which treats all
-    channels equally via (max+min)/2.
+    OKLAB L is perceptually uniform: equal numeric differences correspond
+    to equal perceived brightness differences. Unlike BT.709 linear
+    luminance, a value of 0.5 actually looks like "middle brightness".
 
     Args:
         hex_color: Hex color string like "#FF0000" or "#ff0000".
 
     Returns:
-        Luminance value from 0.0 (black) to 1.0 (white).
+        OKLAB lightness from 0.0 (black) to 1.0 (white).
     """
-    hex_color = hex_color.lstrip('#')
-    r = int(hex_color[0:2], 16) / 255.0
-    g = int(hex_color[2:4], 16) / 255.0
-    b = int(hex_color[4:6], 16) / 255.0
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    from variety.smart_selection.color_science import get_oklab_lightness
+    return get_oklab_lightness(hex_color)
 
 
 def calculate_temperature(hue: float, saturation: float, lightness: float) -> float:
@@ -238,7 +234,7 @@ def calculate_palette_metrics(colors: Dict[str, str]) -> Dict[str, float]:
             luminance = hex_to_luminance(colors[key])
             hues.append(h)
             saturations.append(s)
-            lightnesses.append(luminance)  # BT.709, not HSL L
+            lightnesses.append(luminance)  # OKLAB L, not HSL L
             temperatures.append(calculate_temperature(h, s, l))
 
     if not hues:
@@ -317,9 +313,9 @@ def parse_wallust_json(json_data) -> Dict[str, Any]:
 
 
 def _compute_perceived_brightness(image_path: str) -> Optional[Dict[str, float]]:
-    """Compute perceived brightness from image pixels using PIL.
+    """Compute perceived brightness from image pixels using OKLAB L.
 
-    Converts the image to grayscale (ITU-R BT.601 luminance) and computes
+    Converts the image to OKLAB lightness (perceptually uniform) and computes
     the median pixel value as the primary brightness signal, plus P10/P90
     percentiles for range-based filtering.
 
@@ -328,22 +324,22 @@ def _compute_perceived_brightness(image_path: str) -> Optional[Dict[str, float]]
 
     Returns:
         Dict with 'perceived_brightness', 'brightness_p10', 'brightness_p90'
-        (all 0.0-1.0), or None on failure.
+        (all 0.0-1.0 in OKLAB L), or None on failure.
     """
     try:
-        from PIL import Image, ImageStat
+        from PIL import Image
         import numpy as np
+        from variety.smart_selection.color_science import image_oklab_lightness
 
         img = Image.open(image_path)
         img.thumbnail((256, 256))
-        gray = img.convert('L')  # ITU-R BT.601 luminance
+        rgb_array = np.array(img.convert('RGB'))
 
-        stats = ImageStat.Stat(gray)
-        median_brightness = stats.median[0] / 255.0
+        L = image_oklab_lightness(rgb_array).flatten()
 
-        pixels = np.array(gray).flatten()
-        p10 = float(np.percentile(pixels, 10)) / 255.0
-        p90 = float(np.percentile(pixels, 90)) / 255.0
+        median_brightness = float(np.median(L))
+        p10 = float(np.percentile(L, 10))
+        p90 = float(np.percentile(L, 90))
 
         return {
             'perceived_brightness': median_brightness,
@@ -510,7 +506,7 @@ class PaletteExtractor:
         return None
 
     def _calculate_raw_lightness(self, raw_data) -> Optional[float]:
-        """Calculate average lightness from raw wallust palette data.
+        """Calculate average OKLAB lightness from raw wallust palette data.
 
         The raw data is a list of palettes, each containing RGB dicts with
         0-1 float values representing the actual extracted image colors.
@@ -519,7 +515,7 @@ class PaletteExtractor:
             raw_data: List of palettes from wallust cache (before theme mapping).
 
         Returns:
-            Average lightness (0.0-1.0) or None if calculation fails.
+            Average OKLAB lightness (0.0-1.0) or None if calculation fails.
         """
         if not isinstance(raw_data, list) or len(raw_data) == 0:
             return None
@@ -528,15 +524,16 @@ class PaletteExtractor:
         if not isinstance(first_palette, list) or len(first_palette) == 0:
             return None
 
+        from variety.smart_selection.color_science import rgb_to_oklab
+
         lightnesses = []
         for rgb in first_palette[:16]:  # Use up to 16 colors
             if isinstance(rgb, dict) and 'red' in rgb and 'green' in rgb and 'blue' in rgb:
-                r = rgb.get('red', 0)
-                g = rgb.get('green', 0)
-                b = rgb.get('blue', 0)
-                # BT.709 relative luminance (perceptually accurate)
-                luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                lightnesses.append(luminance)
+                r = int(rgb.get('red', 0) * 255)
+                g = int(rgb.get('green', 0) * 255)
+                b = int(rgb.get('blue', 0) * 255)
+                L, _, _ = rgb_to_oklab(r, g, b)
+                lightnesses.append(L)
 
         if lightnesses:
             return sum(lightnesses) / len(lightnesses)

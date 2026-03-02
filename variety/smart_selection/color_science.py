@@ -20,6 +20,8 @@ import math
 from functools import lru_cache
 from typing import Dict, Any, List, Optional, Tuple
 
+import numpy as np
+
 
 def srgb_to_linear(c: float) -> float:
     """Convert sRGB component (0-1) to linear RGB.
@@ -218,6 +220,48 @@ def palette_similarity_oklab(palette1: Optional[Dict[str, Any]],
     similarity = max(0.0, 1.0 - (avg_distance / max_expected_distance))
 
     return min(1.0, similarity)
+
+
+def image_oklab_lightness(rgb_array: np.ndarray) -> np.ndarray:
+    """Compute OKLAB L (perceptual lightness) for each pixel in an RGB array.
+
+    Vectorized numpy implementation operating on uint8 RGB arrays.
+    Suitable for thumbnail-sized images (~256x256, ~65K pixels).
+
+    Args:
+        rgb_array: numpy array of shape (H, W, 3) with uint8 RGB values.
+
+    Returns:
+        numpy array of shape (H, W) with OKLAB L values (0.0 to 1.0).
+    """
+    # Normalize to 0-1 float
+    rgb = rgb_array.astype(np.float64) / 255.0
+
+    # sRGB to linear RGB (vectorized)
+    linear = np.where(
+        rgb <= 0.04045,
+        rgb / 12.92,
+        ((rgb + 0.055) / 1.055) ** 2.4,
+    )
+
+    r_lin = linear[:, :, 0]
+    g_lin = linear[:, :, 1]
+    b_lin = linear[:, :, 2]
+
+    # Linear RGB to LMS (cone response) — OKLAB specification matrices
+    l = 0.4122214708 * r_lin + 0.5363325363 * g_lin + 0.0514459929 * b_lin
+    m = 0.2119034982 * r_lin + 0.6806995451 * g_lin + 0.1073969566 * b_lin
+    s = 0.0883024619 * r_lin + 0.2817188376 * g_lin + 0.6299787005 * b_lin
+
+    # Cube root (all values are non-negative for valid sRGB)
+    l_ = np.cbrt(l)
+    m_ = np.cbrt(m)
+    s_ = np.cbrt(s)
+
+    # LMS to OKLAB L (lightness only — skip a, b channels)
+    L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+
+    return L
 
 
 def get_oklab_lightness(hex_color: str) -> float:
