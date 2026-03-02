@@ -236,6 +236,7 @@ class TestThemeOverrideConstraints(unittest.TestCase):
         so time-of-day always wins even when theme is active.
         """
         # Set warm temperature (hue=30), but theme has hue=280
+        self.mock_window.options.smart_color_mode = 'theme'
         self.mock_window.options.smart_color_temperature = 'warm'
         self.mock_window._theme_override = self._make_theme_override(is_active=True)
 
@@ -253,6 +254,7 @@ class TestThemeOverrideConstraints(unittest.TestCase):
         Bug caught: adaptive mode's datetime.now() check runs before
         theme override check, ignoring active theme.
         """
+        self.mock_window.options.smart_color_mode = 'theme'
         self.mock_window.options.smart_color_temperature = 'adaptive'
         self.mock_window._theme_override = self._make_theme_override(is_active=True)
 
@@ -313,12 +315,45 @@ class TestThemeOverrideConstraints(unittest.TestCase):
 
     # === Palette Shape Tests ===
 
+    def test_adaptive_mode_ignores_active_theme(self):
+        """In adaptive mode, active theme does NOT affect color selection.
+
+        The color mode toggle is explicit — adaptive mode always uses
+        temperature/time-of-day logic even if a theme is active.
+        """
+        self.mock_window.options.smart_color_mode = 'adaptive'
+        self.mock_window.options.smart_color_temperature = 'warm'
+        self.mock_window._theme_override = self._make_theme_override(is_active=True)
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.target_palette['avg_hue'], 30,
+            "Adaptive mode should use warm hue 30 even with active theme"
+        )
+
+    def test_theme_mode_no_active_theme_returns_none(self):
+        """In theme mode with no active theme, returns None (no color filtering)."""
+        self.mock_window.options.smart_color_mode = 'theme'
+        self.mock_window._theme_override = self._make_theme_override(
+            is_active=False, palette=None
+        )
+
+        result = self.mock_window._get_smart_color_constraints()
+
+        self.assertIsNone(
+            result,
+            "Theme mode with no active theme should return None"
+        )
+
     def test_theme_palette_has_correct_shape(self):
         """Theme target_palette includes color keys AND metric keys.
 
         Bug caught: target_palette from theme missing avg_* metrics,
         which are needed by color_affinity_factor() for similarity calculation.
         """
+        self.mock_window.options.smart_color_mode = 'theme'
         theme_palette = {
             'avg_hue': 280,
             'avg_saturation': 0.6,
@@ -372,6 +407,7 @@ class TestThemeOverrideConstraints(unittest.TestCase):
         instead of the theme-specific adherence level.
         """
         from variety.smart_selection.models import ADHERENCE_LEVELS
+        self.mock_window.options.smart_color_mode = 'theme'
         # User has their own similarity configured (50%)
         self.mock_window.options.smart_color_similarity = 50
         # Theme adherence defaults to 'moderate' via getattr fallback

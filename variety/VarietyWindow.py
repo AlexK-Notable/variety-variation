@@ -632,24 +632,32 @@ class VarietyWindow(Gtk.Window):
             logger.debug(lambda: "Color selection disabled in options")
             return None
 
-        # THEME OVERRIDE PRIORITY: If active, use theme palette for selection
-        theme_override = getattr(self, '_theme_override', None)
-        if theme_override and theme_override.is_active:
-            from variety.smart_selection.models import ADHERENCE_LEVELS
-            adherence = getattr(self.options, 'smart_theme_adherence', 'moderate')
-            min_sim = ADHERENCE_LEVELS.get(adherence)
-            if min_sim is None:
-                # "off" or unknown — templates only, no wallpaper filtering
-                logger.info(lambda: "Color selection: theme override active but adherence=off")
-                return None
-            target = theme_override.get_target_palette_for_selection()
-            if target:
-                logger.info(lambda: f"Color selection: using theme override palette "
-                            f"(adherence={adherence}, min_sim={min_sim})")
-                return SelectionConstraints(
-                    target_palette=target,
-                    min_color_similarity=min_sim,
-                )
+        color_mode = getattr(self.options, 'smart_color_mode', 'adaptive')
+
+        if color_mode == 'theme':
+            # Theme mode: use active theme palette for selection
+            theme_override = getattr(self, '_theme_override', None)
+            if theme_override and theme_override.is_active:
+                from variety.smart_selection.models import ADHERENCE_LEVELS
+                adherence = getattr(self.options, 'smart_theme_adherence', 'moderate')
+                min_sim = ADHERENCE_LEVELS.get(adherence)
+                if min_sim is None:
+                    # "off" or unknown — templates only, no wallpaper filtering
+                    logger.info(lambda: "Color selection: theme mode but adherence=off")
+                    return None
+                target = theme_override.get_target_palette_for_selection()
+                if target:
+                    logger.info(lambda: f"Color selection: theme mode palette "
+                                f"(adherence={adherence}, min_sim={min_sim})")
+                    return SelectionConstraints(
+                        target_palette=target,
+                        min_color_similarity=min_sim,
+                    )
+            # No theme active in theme mode — no color filtering
+            logger.info(lambda: "Color selection: theme mode but no active theme")
+            return None
+
+        # Adaptive mode: temperature/time-of-day logic
 
         # Get similarity threshold (convert 0-100 to 0-1)
         min_similarity = getattr(self.options, 'smart_color_similarity', 50) / 100.0
@@ -659,6 +667,12 @@ class VarietyWindow(Gtk.Window):
         logger.info(lambda: f"Color selection: mode={temperature}, min_similarity={min_similarity:.0%}")
 
         # Define target palette based on preference
+        # Lightness bounds are separate hard filters — they enforce brightness
+        # requirements independently from chromatic (hue/saturation) matching.
+        min_lightness = None
+        max_lightness = None
+        max_brightness_p90 = None
+
         if temperature == 'adaptive':
             # Time-based color selection
             hour = datetime.now().hour
@@ -671,6 +685,7 @@ class VarietyWindow(Gtk.Window):
                     'avg_lightness': 0.55,
                     'color_temperature': -0.3,  # Cool
                 }
+                min_lightness = 0.35
             elif 12 <= hour < 18:  # Afternoon (neutral)
                 period = "afternoon"
                 target_palette = {
@@ -679,6 +694,8 @@ class VarietyWindow(Gtk.Window):
                     'avg_lightness': 0.45,
                     'color_temperature': 0.0,  # Neutral
                 }
+                min_lightness = 0.25
+                max_lightness = 0.65
             elif 18 <= hour < 22:  # Evening (warm, darker)
                 period = "evening"
                 target_palette = {
@@ -687,6 +704,7 @@ class VarietyWindow(Gtk.Window):
                     'avg_lightness': 0.35,
                     'color_temperature': 0.5,  # Warm
                 }
+                max_lightness = 0.55
             else:  # Night (neutral, dark)
                 period = "night"
                 target_palette = {
@@ -695,6 +713,8 @@ class VarietyWindow(Gtk.Window):
                     'avg_lightness': 0.25,
                     'color_temperature': 0.0,  # Neutral
                 }
+                max_lightness = 0.45
+                max_brightness_p90 = 0.70  # Reject images with bright regions
             logger.info(lambda: f"Adaptive mode: {period} (hour={hour}), target_hue={target_palette['avg_hue']}")
         elif temperature == 'warm':
             target_palette = {
@@ -721,6 +741,9 @@ class VarietyWindow(Gtk.Window):
         return SelectionConstraints(
             target_palette=target_palette,
             min_color_similarity=min_similarity,
+            min_lightness=min_lightness,
+            max_lightness=max_lightness,
+            max_brightness_p90=max_brightness_p90,
         )
 
     def register_clipboard(self):
@@ -970,6 +993,11 @@ class VarietyWindow(Gtk.Window):
             for e in self.events:
                 e.set()
 
+    def on_refresh_queue(self, widget=None):
+        """Force-clear and refill the prepared image queue."""
+        self.clear_prepared_queue()
+        logger.info("Queue manually refreshed by user")
+
     def clear_prepared_queue(self):
         self.filters_warning_shown = False
         logger.info(lambda: "Clearing prepared queue")
@@ -1012,6 +1040,19 @@ class VarietyWindow(Gtk.Window):
             self.previous_options.name_regex_enabled != self.options.name_regex_enabled
             or self.previous_options.name_regex != self.options.name_regex
         ):
+            return True
+        # Smart color settings
+        if self.previous_options.smart_color_enabled != self.options.smart_color_enabled:
+            return True
+        if self.previous_options.smart_color_mode != self.options.smart_color_mode:
+            return True
+        if self.previous_options.smart_color_temperature != self.options.smart_color_temperature:
+            return True
+        if self.previous_options.smart_color_similarity != self.options.smart_color_similarity:
+            return True
+        if self.previous_options.smart_active_theme_id != self.options.smart_active_theme_id:
+            return True
+        if self.previous_options.smart_theme_adherence != self.options.smart_theme_adherence:
             return True
         return False
 
@@ -2361,7 +2402,8 @@ class VarietyWindow(Gtk.Window):
 
         try:
             # Get a single image from smart selector with proper weighting
-            selected = self.smart_selector.select_images(1)
+            constraints = self._get_smart_color_constraints()
+            selected = self.smart_selector.select_images(1, constraints=constraints)
 
             if not selected:
                 logger.warning("Smart Selection returned no images, falling back to next_wallpaper")

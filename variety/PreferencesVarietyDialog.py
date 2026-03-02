@@ -439,6 +439,20 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
             self.ui.smart_color_enabled.set_active(self.options.smart_color_enabled)
 
+            # Color mode radio buttons
+            color_mode = getattr(self.options, 'smart_color_mode', 'adaptive')
+            if color_mode == 'theme':
+                self.ui.smart_color_mode_theme.set_active(True)
+            else:
+                self.ui.smart_color_mode_adaptive.set_active(True)
+
+            # Theme adherence combo in color mode section
+            adherence_map = {'off': 0, 'loose': 1, 'moderate': 2, 'strict': 3}
+            adherence = getattr(self.options, 'smart_theme_adherence', 'moderate')
+            self.ui.smart_color_theme_adherence.set_active(
+                adherence_map.get(adherence, 2)
+            )
+
             color_temps = {"warm": 0, "neutral": 1, "cool": 2, "adaptive": 3}
             self.ui.smart_color_temperature.set_active(
                 color_temps.get(self.options.smart_color_temperature, 3)
@@ -545,6 +559,7 @@ class PreferencesVarietyDialog(PreferencesDialog):
             self.update_status_message()
             self.on_smart_selection_enabled_toggled()
             self.on_smart_color_enabled_toggled()
+            self.on_smart_color_mode_changed()
             self.on_smart_color_temperature_changed()
             # Initialize time adaptation controls visibility
             self.on_smart_time_adaptation_toggled()
@@ -1354,6 +1369,18 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
             self.options.smart_color_enabled = self.ui.smart_color_enabled.get_active()
 
+            # Color mode
+            if self.ui.smart_color_mode_theme.get_active():
+                self.options.smart_color_mode = 'theme'
+            else:
+                self.options.smart_color_mode = 'adaptive'
+
+            # Theme adherence from color mode section
+            adherence_levels = ['off', 'loose', 'moderate', 'strict']
+            adherence_idx = self.ui.smart_color_theme_adherence.get_active()
+            if 0 <= adherence_idx < len(adherence_levels):
+                self.options.smart_theme_adherence = adherence_levels[adherence_idx]
+
             color_temps = ["warm", "neutral", "cool", "adaptive"]
             temp_idx = self.ui.smart_color_temperature.get_active()
             if 0 <= temp_idx < len(color_temps):
@@ -1632,20 +1659,68 @@ class PreferencesVarietyDialog(PreferencesDialog):
                 color_enabled = False
 
         enabled = main_enabled and color_enabled
-        self.ui.smart_color_temperature.set_sensitive(enabled)
+        self.ui.smart_color_mode_adaptive.set_sensitive(enabled)
+        self.ui.smart_color_mode_theme.set_sensitive(enabled)
         self.ui.smart_color_similarity.set_sensitive(enabled)
         self.ui.smart_time_adaptation.set_sensitive(enabled)
+        # Update mode-dependent controls
+        self.on_smart_color_mode_changed()
+
+    def on_smart_color_mode_changed(self, widget=None):
+        """Toggle visibility of adaptive vs theme controls based on color mode."""
+        main_enabled = self.ui.smart_selection_enabled.get_active()
+        color_enabled = self.ui.smart_color_enabled.get_active()
+        enabled = main_enabled and color_enabled
+        is_theme = self.ui.smart_color_mode_theme.get_active()
+
+        # Adaptive controls: temperature, time adaptation
+        self.ui.smart_color_temperature.set_sensitive(enabled and not is_theme)
+        self.ui.smart_color_temperature_box.set_visible(not is_theme)
+        self.ui.smart_time_adaptation.set_sensitive(enabled and not is_theme)
+
+        # Theme controls: adherence combo, no-theme label
+        self.ui.smart_color_theme_adherence_box.set_visible(is_theme and enabled)
+
+        # Show "no theme active" warning if in theme mode but no theme is set
+        has_theme = bool(getattr(self.options, 'smart_active_theme_id', None))
+        if hasattr(self, 'parent') and self.parent:
+            theme_override = getattr(self.parent, '_theme_override', None)
+            if theme_override and theme_override.is_active:
+                has_theme = True
+        self.ui.smart_color_no_theme_label.set_visible(
+            is_theme and enabled and not has_theme
+        )
+
         # Time adaptation visibility depends on adaptive temperature
         self.on_smart_color_temperature_changed()
+
+    def on_smart_color_theme_adherence_changed(self, widget=None):
+        """Sync adherence change to Theme Browser tab."""
+        if self.loading:
+            return
+        adherence_levels = ['off', 'loose', 'moderate', 'strict']
+        idx = self.ui.smart_color_theme_adherence.get_active()
+        if 0 <= idx < len(adherence_levels):
+            adherence = adherence_levels[idx]
+            self.options.smart_theme_adherence = adherence
+            # Sync to Theme Browser if it exists
+            if hasattr(self, '_theme_browser_page') and self._theme_browser_page:
+                self._theme_browser_page._adherence_combo.set_active(idx)
+
+    def on_smart_refresh_queue_clicked(self, widget=None):
+        """Clear and refill the prepared image queue."""
+        if hasattr(self, 'parent') and self.parent:
+            self.parent.on_refresh_queue()
 
     def on_smart_color_temperature_changed(self, widget=None):
         """Update visibility of time adaptation based on temperature mode."""
         main_enabled = self.ui.smart_selection_enabled.get_active()
         color_enabled = self.ui.smart_color_enabled.get_active()
-        # Time adaptation only makes sense when in "adaptive" mode
-        is_adaptive = self.ui.smart_color_temperature.get_active() == 3
+        is_adaptive_mode = not self.ui.smart_color_mode_theme.get_active()
+        # Time adaptation only makes sense in adaptive color mode with "adaptive" temperature
+        is_adaptive_temp = self.ui.smart_color_temperature.get_active() == 3
         self.ui.smart_time_adaptation.set_sensitive(
-            main_enabled and color_enabled and is_adaptive
+            main_enabled and color_enabled and is_adaptive_mode and is_adaptive_temp
         )
 
     def on_smart_image_cooldown_changed(self, widget=None):
@@ -3234,6 +3309,16 @@ class PreferencesVarietyDialog(PreferencesDialog):
         # Only update adherence if a theme is active
         if theme_id is not None:
             self.parent.options.smart_theme_adherence = adherence_label
+
+        # Sync to Smart Selection tab's adherence combo
+        adherence_map = {'off': 0, 'loose': 1, 'moderate': 2, 'strict': 3}
+        if hasattr(self.ui, 'smart_color_theme_adherence'):
+            self.ui.smart_color_theme_adherence.set_active(
+                adherence_map.get(adherence_label, 2)
+            )
+
+        # Update no-theme label visibility
+        self.on_smart_color_mode_changed()
 
         self.parent.options.write()
 

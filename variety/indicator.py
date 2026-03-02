@@ -126,6 +126,11 @@ class Indicator:
         self.fast_forward.connect("activate", _fast_forward)
         self.image_menu.append(self.fast_forward)
 
+        self.refresh_queue = Gtk.MenuItem(_("_Refresh image queue"))
+        self.refresh_queue.set_use_underline(True)
+        self.refresh_queue.connect("activate", window.on_refresh_queue)
+        self.image_menu.append(self.refresh_queue)
+
         self.image_menu.append(Gtk.SeparatorMenuItem.new())
         self.scroll_tip = Gtk.MenuItem(_("Tip: Scroll wheel over icon\nfor Next and Previous"))
         self.scroll_tip.set_sensitive(False)

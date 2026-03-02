@@ -365,6 +365,13 @@ class Options:
                 pass
 
             try:
+                color_mode = config["smart_color_mode"].lower().strip()
+                if color_mode in ("adaptive", "theme"):
+                    self.smart_color_mode = color_mode
+            except Exception:
+                pass
+
+            try:
                 color_temp = config["smart_color_temperature"].lower().strip()
                 if color_temp in ("warm", "neutral", "cool", "adaptive"):
                     self.smart_color_temperature = color_temp
@@ -1032,6 +1039,7 @@ class Options:
         self.smart_new_boost = 1.5
         self.smart_decay_type = "exponential"
         self.smart_color_enabled = False
+        self.smart_color_mode = "adaptive"  # "adaptive" or "theme"
         self.smart_color_temperature = "adaptive"
         self.smart_color_similarity = 50
         self.smart_time_adaptation = True
@@ -1189,6 +1197,7 @@ class Options:
             config["smart_new_boost"] = str(self.smart_new_boost)
             config["smart_decay_type"] = self.smart_decay_type
             config["smart_color_enabled"] = str(self.smart_color_enabled)
+            config["smart_color_mode"] = self.smart_color_mode
             config["smart_color_temperature"] = self.smart_color_temperature
             config["smart_color_similarity"] = str(self.smart_color_similarity)
             config["smart_time_adaptation"] = str(self.smart_time_adaptation)
