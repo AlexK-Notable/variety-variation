@@ -2629,7 +2629,8 @@ class VarietyWindow(Gtk.Window):
 
                     # Use smart selector for weighted selection respecting cooldowns
                     if not img:
-                        selected = self.smart_selector.select_images(3)
+                        constraints = self._get_smart_color_constraints()
+                        selected = self.smart_selector.select_images(3, constraints=constraints)
                         selected = [
                             f for f in selected
                             if f != self.current or self.is_current_refreshable()

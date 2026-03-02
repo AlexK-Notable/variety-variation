@@ -1696,7 +1696,7 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
     def on_smart_color_theme_adherence_changed(self, widget=None):
         """Sync adherence change to Theme Browser tab."""
-        if self.loading:
+        if self.loading or getattr(self, '_syncing_adherence', False):
             return
         adherence_levels = ['off', 'loose', 'moderate', 'strict']
         idx = self.ui.smart_color_theme_adherence.get_active()
@@ -3291,7 +3291,7 @@ class PreferencesVarietyDialog(PreferencesDialog):
 
         Args:
             theme_id: The activated theme ID, or None if cleared.
-            adherence: Adherence level float (0.15/0.30/0.50) or None for off.
+            adherence: Adherence level float (0.60/0.70/0.80) or None for off.
         """
         if not hasattr(self, 'parent') or not self.parent:
             return
@@ -3310,12 +3310,16 @@ class PreferencesVarietyDialog(PreferencesDialog):
         if theme_id is not None:
             self.parent.options.smart_theme_adherence = adherence_label
 
-        # Sync to Smart Selection tab's adherence combo
-        adherence_map = {'off': 0, 'loose': 1, 'moderate': 2, 'strict': 3}
-        if hasattr(self.ui, 'smart_color_theme_adherence'):
-            self.ui.smart_color_theme_adherence.set_active(
-                adherence_map.get(adherence_label, 2)
-            )
+            # Sync to Smart Selection tab's adherence combo
+            self._syncing_adherence = True
+            try:
+                adherence_map = {'off': 0, 'loose': 1, 'moderate': 2, 'strict': 3}
+                if hasattr(self.ui, 'smart_color_theme_adherence'):
+                    self.ui.smart_color_theme_adherence.set_active(
+                        adherence_map.get(adherence_label, 2)
+                    )
+            finally:
+                self._syncing_adherence = False
 
         # Update no-theme label visibility
         self.on_smart_color_mode_changed()
