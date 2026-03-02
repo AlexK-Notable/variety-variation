@@ -22,8 +22,10 @@ def _fill_with_blur(filename):
     w, h = Util.get_primary_display_size()
     return (
         "zoom",
-        "-resize %dx%d^ -gravity center -extent %dx%d -blur 0x10 -clone 0 -resize %dx%d -size %dx%d -gravity center -composite"
-        % (w, h, w, h, w, h, w, h),
+        "\\( +clone -resize %dx%d^ -gravity center -extent %dx%d "
+        "-scale 10%% -blur 0x3 -resize 1000%% \\) "
+        "+swap -resize %dx%d -gravity center -composite"
+        % (w, h, w, h, w, h),
     )
 
 
