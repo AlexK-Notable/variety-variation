@@ -1123,15 +1123,12 @@ class ThemeEngine:
                     reload_commands.append((config.name, config.reload_command))
 
         # Run reload commands asynchronously
-        if reload_commands or gtk_dynamic_written:
-            def _reload_all():
-                for name, command in reload_commands:
-                    self._run_reload_command(command, name)
-                if gtk_dynamic_written:
-                    self._reload_gtk_theme()
+        if reload_commands:
+            self._run_reload_commands_async(reload_commands)
 
-            thread = threading.Thread(target=_reload_all, daemon=True)
-            thread.start()
+        # Toggle GTK theme to force CSS reload in all GTK apps
+        if gtk_dynamic_written:
+            threading.Thread(target=self._reload_gtk_theme, daemon=True).start()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(
@@ -1189,15 +1186,11 @@ class ThemeEngine:
                 if config.reload_command:
                     reload_commands.append((config.name, config.reload_command))
 
-        if reload_commands or gtk_dynamic_written:
-            def _reload_all():
-                for name, command in reload_commands:
-                    self._run_reload_command(command, name)
-                if gtk_dynamic_written:
-                    self._reload_gtk_theme()
+        if reload_commands:
+            self._run_reload_commands_async(reload_commands)
 
-            thread = threading.Thread(target=_reload_all, daemon=True)
-            thread.start()
+        if gtk_dynamic_written:
+            threading.Thread(target=self._reload_gtk_theme, daemon=True).start()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         logger.info(

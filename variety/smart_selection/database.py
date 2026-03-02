@@ -35,7 +35,7 @@ class ImageDatabase:
         are applied automatically on initialization.
     """
 
-    SCHEMA_VERSION = 9
+    SCHEMA_VERSION = 10
 
     def __init__(self, db_path: str):
         """Initialize database connection and create schema if needed.
@@ -201,6 +201,7 @@ class ImageDatabase:
             7: self._migrate_v6_to_v7,
             8: self._migrate_v7_to_v8,
             9: self._migrate_v8_to_v9,
+            10: self._migrate_v9_to_v10,
         }
 
         with self._lock:
@@ -536,6 +537,32 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info("Migration v8→v9: Added perceived_brightness columns to palettes")
+
+    def _migrate_v9_to_v10(self):
+        """Migrate schema from v9 to v10.
+
+        Adds pixel-derived color metric columns to the palettes table:
+        pixel_warm_ratio, pixel_chroma_median, pixel_hue_entropy,
+        pixel_dominant_hue, pixel_temperature.
+        """
+        cursor = self.conn.cursor()
+
+        for col in ('pixel_warm_ratio', 'pixel_chroma_median',
+                     'pixel_hue_entropy', 'pixel_dominant_hue',
+                     'pixel_temperature'):
+            cursor.execute(f'ALTER TABLE palettes ADD COLUMN {col} REAL')
+
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_palettes_pixel_temperature '
+            'ON palettes(pixel_temperature)'
+        )
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_palettes_pixel_warm_ratio '
+            'ON palettes(pixel_warm_ratio)'
+        )
+
+        self.conn.commit()
+        logger.info("Migration v9→v10: Added pixel_* columns to palettes")
 
     def close(self):
         """Close the database connection.
@@ -1078,8 +1105,10 @@ class ImageDatabase:
                     color8, color9, color10, color11, color12, color13, color14, color15,
                     background, foreground, cursor, avg_hue, avg_saturation, avg_lightness,
                     color_temperature, perceived_brightness, brightness_p10, brightness_p90,
+                    pixel_warm_ratio, pixel_chroma_median, pixel_hue_entropy,
+                    pixel_dominant_hue, pixel_temperature,
                     indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     color0 = excluded.color0, color1 = excluded.color1,
                     color2 = excluded.color2, color3 = excluded.color3,
@@ -1097,6 +1126,11 @@ class ImageDatabase:
                     perceived_brightness = excluded.perceived_brightness,
                     brightness_p10 = excluded.brightness_p10,
                     brightness_p90 = excluded.brightness_p90,
+                    pixel_warm_ratio = excluded.pixel_warm_ratio,
+                    pixel_chroma_median = excluded.pixel_chroma_median,
+                    pixel_hue_entropy = excluded.pixel_hue_entropy,
+                    pixel_dominant_hue = excluded.pixel_dominant_hue,
+                    pixel_temperature = excluded.pixel_temperature,
                     indexed_at = excluded.indexed_at
             ''', (
                 record.filepath,
@@ -1107,7 +1141,10 @@ class ImageDatabase:
                 record.background, record.foreground, record.cursor,
                 record.avg_hue, record.avg_saturation, record.avg_lightness,
                 record.color_temperature, record.perceived_brightness,
-                record.brightness_p10, record.brightness_p90, record.indexed_at,
+                record.brightness_p10, record.brightness_p90,
+                record.pixel_warm_ratio, record.pixel_chroma_median,
+                record.pixel_hue_entropy, record.pixel_dominant_hue,
+                record.pixel_temperature, record.indexed_at,
             ))
             self.conn.commit()
 
@@ -1236,6 +1273,11 @@ class ImageDatabase:
             perceived_brightness=row['perceived_brightness'],
             brightness_p10=row['brightness_p10'],
             brightness_p90=row['brightness_p90'],
+            pixel_warm_ratio=row['pixel_warm_ratio'],
+            pixel_chroma_median=row['pixel_chroma_median'],
+            pixel_hue_entropy=row['pixel_hue_entropy'],
+            pixel_dominant_hue=row['pixel_dominant_hue'],
+            pixel_temperature=row['pixel_temperature'],
             indexed_at=row['indexed_at'],
         )
 
@@ -1259,8 +1301,10 @@ class ImageDatabase:
                     color8, color9, color10, color11, color12, color13, color14, color15,
                     background, foreground, cursor, avg_hue, avg_saturation, avg_lightness,
                     color_temperature, perceived_brightness, brightness_p10, brightness_p90,
+                    pixel_warm_ratio, pixel_chroma_median, pixel_hue_entropy,
+                    pixel_dominant_hue, pixel_temperature,
                     indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(filepath) DO UPDATE SET
                     color0 = excluded.color0, color1 = excluded.color1,
                     color2 = excluded.color2, color3 = excluded.color3,
@@ -1278,6 +1322,11 @@ class ImageDatabase:
                     perceived_brightness = excluded.perceived_brightness,
                     brightness_p10 = excluded.brightness_p10,
                     brightness_p90 = excluded.brightness_p90,
+                    pixel_warm_ratio = excluded.pixel_warm_ratio,
+                    pixel_chroma_median = excluded.pixel_chroma_median,
+                    pixel_hue_entropy = excluded.pixel_hue_entropy,
+                    pixel_dominant_hue = excluded.pixel_dominant_hue,
+                    pixel_temperature = excluded.pixel_temperature,
                     indexed_at = excluded.indexed_at
             ''', [
                 (
@@ -1289,7 +1338,10 @@ class ImageDatabase:
                     r.background, r.foreground, r.cursor,
                     r.avg_hue, r.avg_saturation, r.avg_lightness,
                     r.color_temperature, r.perceived_brightness,
-                    r.brightness_p10, r.brightness_p90, r.indexed_at,
+                    r.brightness_p10, r.brightness_p90,
+                    r.pixel_warm_ratio, r.pixel_chroma_median,
+                    r.pixel_hue_entropy, r.pixel_dominant_hue,
+                    r.pixel_temperature, r.indexed_at,
                 )
                 for r in records
             ])

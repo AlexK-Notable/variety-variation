@@ -222,8 +222,8 @@ def palette_similarity_oklab(palette1: Optional[Dict[str, Any]],
     return min(1.0, similarity)
 
 
-def image_oklab_lightness(rgb_array: np.ndarray) -> np.ndarray:
-    """Compute OKLAB L (perceptual lightness) for each pixel in an RGB array.
+def image_oklab_channels(rgb_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute full OKLAB (L, a, b) for each pixel in an RGB array.
 
     Vectorized numpy implementation operating on uint8 RGB arrays.
     Suitable for thumbnail-sized images (~256x256, ~65K pixels).
@@ -232,7 +232,8 @@ def image_oklab_lightness(rgb_array: np.ndarray) -> np.ndarray:
         rgb_array: numpy array of shape (H, W, 3) with uint8 RGB values.
 
     Returns:
-        numpy array of shape (H, W) with OKLAB L values (0.0 to 1.0).
+        Tuple of (L, a, b) arrays, each shape (H, W).
+        L: lightness 0-1, a: green-red ~-0.4 to +0.4, b: blue-yellow ~-0.4 to +0.4
     """
     # Normalize to 0-1 float
     rgb = rgb_array.astype(np.float64) / 255.0
@@ -258,9 +259,26 @@ def image_oklab_lightness(rgb_array: np.ndarray) -> np.ndarray:
     m_ = np.cbrt(m)
     s_ = np.cbrt(s)
 
-    # LMS to OKLAB L (lightness only — skip a, b channels)
+    # LMS to OKLAB
     L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+    b_out = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
 
+    return (L, a, b_out)
+
+
+def image_oklab_lightness(rgb_array: np.ndarray) -> np.ndarray:
+    """Compute OKLAB L (perceptual lightness) for each pixel in an RGB array.
+
+    Convenience wrapper around image_oklab_channels() that returns only L.
+
+    Args:
+        rgb_array: numpy array of shape (H, W, 3) with uint8 RGB values.
+
+    Returns:
+        numpy array of shape (H, W) with OKLAB L values (0.0 to 1.0).
+    """
+    L, _, _ = image_oklab_channels(rgb_array)
     return L
 
 

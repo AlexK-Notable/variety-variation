@@ -375,5 +375,72 @@ class TestColorDistance(unittest.TestCase):
         self.assertAlmostEqual(distance, 1.0, places=2)
 
 
+class TestImageOKLABChannels(unittest.TestCase):
+    """Tests for image_oklab_channels — full OKLAB pixel arrays."""
+
+    def test_import(self):
+        """image_oklab_channels can be imported."""
+        from variety.smart_selection.color_science import image_oklab_channels
+        self.assertIsNotNone(image_oklab_channels)
+
+    def test_returns_correct_shape(self):
+        """Returns three arrays of shape (H, W)."""
+        import numpy as np
+        from variety.smart_selection.color_science import image_oklab_channels
+
+        rgb = np.zeros((50, 80, 3), dtype=np.uint8)
+        L, a, b = image_oklab_channels(rgb)
+
+        self.assertEqual(L.shape, (50, 80))
+        self.assertEqual(a.shape, (50, 80))
+        self.assertEqual(b.shape, (50, 80))
+
+    def test_black_image(self):
+        """All-black image: L≈0, a≈0, b≈0."""
+        import numpy as np
+        from variety.smart_selection.color_science import image_oklab_channels
+
+        rgb = np.zeros((10, 10, 3), dtype=np.uint8)
+        L, a, b = image_oklab_channels(rgb)
+
+        self.assertAlmostEqual(float(np.mean(L)), 0.0, places=4)
+        self.assertAlmostEqual(float(np.mean(a)), 0.0, places=4)
+        self.assertAlmostEqual(float(np.mean(b)), 0.0, places=4)
+
+    def test_white_image(self):
+        """All-white image: L≈1, a≈0, b≈0."""
+        import numpy as np
+        from variety.smart_selection.color_science import image_oklab_channels
+
+        rgb = np.full((10, 10, 3), 255, dtype=np.uint8)
+        L, a, b = image_oklab_channels(rgb)
+
+        self.assertAlmostEqual(float(np.mean(L)), 1.0, places=3)
+        self.assertAlmostEqual(float(np.mean(a)), 0.0, places=3)
+        self.assertAlmostEqual(float(np.mean(b)), 0.0, places=3)
+
+    def test_pure_red_positive_a(self):
+        """Pure red pixels: positive a, near-zero or positive b."""
+        import numpy as np
+        from variety.smart_selection.color_science import image_oklab_channels
+
+        rgb = np.zeros((10, 10, 3), dtype=np.uint8)
+        rgb[:, :, 0] = 255  # Red channel
+        L, a, b = image_oklab_channels(rgb)
+
+        self.assertGreater(float(np.mean(a)), 0.1)
+
+    def test_backward_compat_lightness_only(self):
+        """image_oklab_lightness still works and matches L from channels."""
+        import numpy as np
+        from variety.smart_selection.color_science import image_oklab_lightness, image_oklab_channels
+
+        rgb = np.random.randint(0, 256, (20, 20, 3), dtype=np.uint8)
+        L_only = image_oklab_lightness(rgb)
+        L_channels, _, _ = image_oklab_channels(rgb)
+
+        np.testing.assert_array_almost_equal(L_only, L_channels, decimal=10)
+
+
 if __name__ == '__main__':
     unittest.main()

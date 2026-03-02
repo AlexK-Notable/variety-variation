@@ -991,7 +991,7 @@ class TestHexToLuminance(unittest.TestCase):
 
 
 class TestComputePerceivedBrightness(unittest.TestCase):
-    """Tests for _compute_perceived_brightness OKLAB-based brightness.
+    """Tests for _compute_pixel_metrics OKLAB-based brightness.
 
     This function computes OKLAB L per pixel, then takes the median
     plus P10/P90 percentiles for range detection.
@@ -1013,16 +1013,16 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         return path
 
     def test_import(self):
-        """_compute_perceived_brightness can be imported."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
-        self.assertIsNotNone(_compute_perceived_brightness)
+        """_compute_pixel_metrics can be imported."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+        self.assertIsNotNone(_compute_pixel_metrics)
 
     def test_dark_image_low_brightness(self):
         """Near-black image has very low perceived brightness."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
         path = self._make_image('dark.jpg', '#0A0A0A')
-        result = _compute_perceived_brightness(path)
+        result = _compute_pixel_metrics(path)
 
         self.assertIsNotNone(result)
         # OKLAB L for #0A0A0A ≈ 0.145
@@ -1031,10 +1031,10 @@ class TestComputePerceivedBrightness(unittest.TestCase):
 
     def test_bright_image_high_brightness(self):
         """Near-white image has very high perceived brightness."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
         path = self._make_image('bright.jpg', '#F0F0F0')
-        result = _compute_perceived_brightness(path)
+        result = _compute_pixel_metrics(path)
 
         self.assertIsNotNone(result)
         self.assertGreater(result['perceived_brightness'], 0.9)
@@ -1047,7 +1047,7 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         but P90 catches the bright region that would be glaring at night.
         Use PNG to avoid JPEG compression artifacts blurring boundaries.
         """
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
         # Create image: 70% dark, 30% bright (enough for P90 to land in bright)
         img = Image.new('RGB', (100, 100), color='#0A0A0A')
@@ -1059,7 +1059,7 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         path = os.path.join(self.temp_dir, 'mixed.png')
         img.save(path)
 
-        result = _compute_perceived_brightness(path)
+        result = _compute_pixel_metrics(path)
 
         self.assertIsNotNone(result)
         # Median should be low (70% of pixels are dark)
@@ -1071,10 +1071,10 @@ class TestComputePerceivedBrightness(unittest.TestCase):
 
     def test_returns_all_three_keys(self):
         """Result dict contains perceived_brightness, brightness_p10, brightness_p90."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
         path = self._make_image('gray.jpg', '#808080')
-        result = _compute_perceived_brightness(path)
+        result = _compute_pixel_metrics(path)
 
         self.assertIsNotNone(result)
         self.assertIn('perceived_brightness', result)
@@ -1083,10 +1083,10 @@ class TestComputePerceivedBrightness(unittest.TestCase):
 
     def test_values_between_zero_and_one(self):
         """All values are normalized to [0, 1] range."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
         path = self._make_image('mid.jpg', '#808080')
-        result = _compute_perceived_brightness(path)
+        result = _compute_pixel_metrics(path)
 
         for key in ('perceived_brightness', 'brightness_p10', 'brightness_p90'):
             self.assertGreaterEqual(result[key], 0.0)
@@ -1094,7 +1094,7 @@ class TestComputePerceivedBrightness(unittest.TestCase):
 
     def test_p10_less_than_p90(self):
         """P10 should always be <= P90."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
         # Gradient image for varied brightness
         img = Image.new('RGB', (100, 100))
@@ -1106,14 +1106,14 @@ class TestComputePerceivedBrightness(unittest.TestCase):
         path = os.path.join(self.temp_dir, 'gradient.jpg')
         img.save(path)
 
-        result = _compute_perceived_brightness(path)
+        result = _compute_pixel_metrics(path)
         self.assertLessEqual(result['brightness_p10'], result['brightness_p90'])
 
     def test_nonexistent_file_returns_none(self):
         """Returns None for nonexistent file."""
-        from variety.smart_selection.palette import _compute_perceived_brightness
+        from variety.smart_selection.palette import _compute_pixel_metrics
 
-        result = _compute_perceived_brightness('/nonexistent/path.jpg')
+        result = _compute_pixel_metrics('/nonexistent/path.jpg')
         self.assertIsNone(result)
 
 
@@ -1172,6 +1172,308 @@ class TestOKLABInPaletteMetrics(unittest.TestCase):
             f"Yellow-blue lightness gap should be >0.4 with OKLAB, got {diff:.3f}. "
             f"If ~0.0, HSL lightness is still being used."
         )
+
+
+class TestComputePixelMetrics(unittest.TestCase):
+    """Tests for _compute_pixel_metrics — distribution-aware color signals."""
+
+    def setUp(self):
+        """Create temporary directory for test images."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _save_image(self, name, color, size=(100, 100)):
+        """Create a solid-color test image."""
+        path = os.path.join(self.temp_dir, name)
+        img = Image.new('RGB', size, color=color)
+        img.save(path)
+        return path
+
+    def _save_gradient(self, name, color_start, color_end, size=(100, 100)):
+        """Create a horizontal gradient test image."""
+        import numpy as np
+        w, h = size
+        arr = np.zeros((h, w, 3), dtype=np.uint8)
+        for x in range(w):
+            t = x / max(w - 1, 1)
+            for c in range(3):
+                arr[:, x, c] = int(color_start[c] * (1 - t) + color_end[c] * t)
+        path = os.path.join(self.temp_dir, name)
+        Image.fromarray(arr).save(path)
+        return path
+
+    def test_returns_all_expected_keys(self):
+        """_compute_pixel_metrics returns all expected signal keys."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        path = self._save_image('red.jpg', '#FF4400')
+        result = _compute_pixel_metrics(path)
+
+        self.assertIsNotNone(result)
+        expected_keys = [
+            'perceived_brightness', 'brightness_p10', 'brightness_p90',
+            'pixel_warm_ratio', 'pixel_chroma_median',
+            'pixel_hue_entropy', 'pixel_dominant_hue', 'pixel_temperature',
+        ]
+        for key in expected_keys:
+            self.assertIn(key, result, f"Missing key: {key}")
+
+    def test_warm_image_signals(self):
+        """Red/orange image → high warm_ratio, positive temperature."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        path = self._save_image('warm.jpg', '#FF6600')
+        result = _compute_pixel_metrics(path)
+
+        self.assertGreater(result['pixel_warm_ratio'], 0.7)
+        self.assertGreater(result['pixel_temperature'], 0.3)
+
+    def test_cool_image_signals(self):
+        """Blue image → low warm_ratio, negative temperature."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        path = self._save_image('cool.jpg', '#0066FF')
+        result = _compute_pixel_metrics(path)
+
+        self.assertLess(result['pixel_warm_ratio'], 0.3)
+        self.assertLess(result['pixel_temperature'], -0.3)
+
+    def test_grayscale_image_signals(self):
+        """Grayscale image → low chroma, neutral warm_ratio."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        path = self._save_image('gray.jpg', '#808080')
+        result = _compute_pixel_metrics(path)
+
+        self.assertLess(result['pixel_chroma_median'], 0.02)
+        # Neutral warm ratio for achromatic images
+        self.assertAlmostEqual(result['pixel_warm_ratio'], 0.5, places=1)
+
+    def test_rainbow_gradient_high_entropy(self):
+        """Rainbow gradient → high hue entropy."""
+        import numpy as np
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        # Create a rainbow gradient: hue varies across width
+        w, h = 360, 100
+        arr = np.zeros((h, w, 3), dtype=np.uint8)
+        for x in range(w):
+            # Simple HSV to RGB for hue sweep (S=1, V=1)
+            hue = x  # degrees
+            c = 255
+            x_val = int(c * (1 - abs((hue / 60) % 2 - 1)))
+            if hue < 60:
+                arr[:, x] = [c, x_val, 0]
+            elif hue < 120:
+                arr[:, x] = [x_val, c, 0]
+            elif hue < 180:
+                arr[:, x] = [0, c, x_val]
+            elif hue < 240:
+                arr[:, x] = [0, x_val, c]
+            elif hue < 300:
+                arr[:, x] = [x_val, 0, c]
+            else:
+                arr[:, x] = [c, 0, x_val]
+
+        path = os.path.join(self.temp_dir, 'rainbow.jpg')
+        Image.fromarray(arr).save(path)
+        result = _compute_pixel_metrics(path)
+
+        self.assertGreater(result['pixel_hue_entropy'], 1.5)
+
+    def test_monochromatic_low_entropy(self):
+        """Solid color → low hue entropy."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        path = self._save_image('mono.jpg', '#FF0000')
+        result = _compute_pixel_metrics(path)
+
+        self.assertLess(result['pixel_hue_entropy'], 0.5)
+
+    def test_nonexistent_file_returns_none(self):
+        """Non-existent file returns None."""
+        from variety.smart_selection.palette import _compute_pixel_metrics
+
+        result = _compute_pixel_metrics('/nonexistent/path.jpg')
+        self.assertIsNone(result)
+
+
+class TestPaletteSimilarityHSLBugFix(unittest.TestCase):
+    """Tests for palette_similarity_hsl None-default bug fix.
+
+    Previously, palettes without avg_* metrics defaulted to 0/0.5,
+    making both palettes appear identical → similarity = 1.0.
+    After the fix, missing metrics → similarity = 0.0 (unknown).
+    """
+
+    def test_both_palettes_missing_metrics_returns_zero(self):
+        """Two palettes with only color0-15 (no avg_*) → 0.0, not 1.0."""
+        from variety.smart_selection.palette import palette_similarity_hsl
+
+        p1 = {'color0': '#ff0000', 'color1': '#00ff00'}
+        p2 = {'color0': '#0000ff', 'color1': '#ffff00'}
+
+        similarity = palette_similarity_hsl(p1, p2)
+        self.assertEqual(similarity, 0.0)
+
+    def test_one_palette_missing_metrics_returns_zero(self):
+        """One palette with metrics, one without → 0.0."""
+        from variety.smart_selection.palette import palette_similarity_hsl
+
+        p1 = {'avg_hue': 30, 'avg_saturation': 0.8, 'avg_lightness': 0.5,
+               'color_temperature': 0.7}
+        p2 = {'color0': '#0000ff'}
+
+        similarity = palette_similarity_hsl(p1, p2)
+        self.assertEqual(similarity, 0.0)
+
+    def test_both_have_metrics_returns_nonzero(self):
+        """Both palettes with metrics → normal similarity (not 0.0)."""
+        from variety.smart_selection.palette import palette_similarity_hsl
+
+        p1 = {'avg_hue': 30, 'avg_saturation': 0.8, 'avg_lightness': 0.5,
+               'color_temperature': 0.7}
+        p2 = {'avg_hue': 35, 'avg_saturation': 0.75, 'avg_lightness': 0.55,
+               'color_temperature': 0.6}
+
+        similarity = palette_similarity_hsl(p1, p2)
+        self.assertGreater(similarity, 0.8)
+
+
+class TestPixelSimilarity(unittest.TestCase):
+    """Tests for pixel_similarity — image pixel signals vs theme metrics."""
+
+    def test_import(self):
+        """pixel_similarity can be imported."""
+        from variety.smart_selection.palette import pixel_similarity
+        self.assertIsNotNone(pixel_similarity)
+
+    def test_warm_image_warm_theme_high_score(self):
+        """Warm image metrics vs warm theme → high score."""
+        from variety.smart_selection.palette import pixel_similarity
+
+        image = {
+            'pixel_temperature': 0.8,
+            'pixel_warm_ratio': 0.85,
+            'pixel_chroma_median': 0.15,
+            'pixel_hue_entropy': 0.5,
+        }
+        theme = {
+            'color_temperature': 0.7,
+            'avg_saturation': 0.6,
+        }
+
+        score = pixel_similarity(image, theme)
+        self.assertGreater(score, 0.7)
+
+    def test_warm_image_cool_theme_low_score(self):
+        """Warm image metrics vs cool theme → low score (well below 0.5)."""
+        from variety.smart_selection.palette import pixel_similarity
+
+        image = {
+            'pixel_temperature': 0.8,
+            'pixel_warm_ratio': 0.85,
+            'pixel_chroma_median': 0.15,
+            'pixel_hue_entropy': 0.5,
+        }
+        theme = {
+            'color_temperature': -0.7,
+            'avg_saturation': 0.5,
+        }
+
+        score = pixel_similarity(image, theme)
+        self.assertLess(score, 0.5)
+
+    def test_cool_image_cool_theme_high_score(self):
+        """Cool image metrics vs cool theme → high score."""
+        from variety.smart_selection.palette import pixel_similarity
+
+        image = {
+            'pixel_temperature': -0.7,
+            'pixel_warm_ratio': 0.15,
+            'pixel_chroma_median': 0.12,
+            'pixel_hue_entropy': 0.4,
+        }
+        theme = {
+            'color_temperature': -0.6,
+            'avg_saturation': 0.5,
+        }
+
+        score = pixel_similarity(image, theme)
+        self.assertGreater(score, 0.7)
+
+    def test_lakeside_scenario_rejects_warm_painting(self):
+        """Warm painting vs cool Lakeside theme → score < 0.5 (hard fail).
+
+        This is the core bug scenario: wallhaven-j5263m.jpg (warm amber/orange
+        painting) was scoring 0.97 against Atelier Lakeside (cool blue-gray)
+        due to wallust palette extraction bias.
+        """
+        from variety.smart_selection.palette import pixel_similarity
+
+        # Simulate pixel signals for a warm amber/orange painting
+        warm_painting = {
+            'pixel_temperature': 0.75,
+            'pixel_warm_ratio': 0.80,
+            'pixel_chroma_median': 0.12,
+            'pixel_hue_entropy': 0.8,
+        }
+        # Atelier Lakeside: cool blue-gray terminal theme
+        lakeside = {
+            'color_temperature': -0.5,
+            'avg_saturation': 0.35,
+        }
+
+        score = pixel_similarity(warm_painting, lakeside)
+        self.assertLess(score, 0.5,
+                        f"Warm painting should NOT match cool Lakeside, got {score:.2f}")
+
+    def test_missing_essential_signals_returns_zero(self):
+        """Missing pixel_temperature or theme temperature → 0.0."""
+        from variety.smart_selection.palette import pixel_similarity
+
+        self.assertEqual(pixel_similarity({}, {'color_temperature': 0.5}), 0.0)
+        self.assertEqual(pixel_similarity({'pixel_temperature': 0.5}, {}), 0.0)
+
+
+class TestPaletteSimilarityPixelRouting(unittest.TestCase):
+    """Tests that palette_similarity() routes to pixel_similarity when pixel_* exists."""
+
+    def test_routes_to_pixel_similarity_when_pixel_signals_present(self):
+        """palette_similarity auto-routes to pixel_similarity with pixel_* keys."""
+        from variety.smart_selection.palette import palette_similarity
+
+        image = {
+            'pixel_temperature': 0.8,
+            'pixel_warm_ratio': 0.85,
+            'pixel_chroma_median': 0.15,
+            'pixel_hue_entropy': 0.5,
+        }
+        theme = {
+            'color_temperature': -0.7,
+            'avg_saturation': 0.5,
+            'avg_hue': 210,
+            'avg_lightness': 0.4,
+        }
+
+        # Should use pixel_similarity path → low score (warm vs cool)
+        score = palette_similarity(image, theme, use_oklab=False)
+        self.assertLess(score, 0.5)
+
+    def test_falls_back_to_hsl_without_pixel_signals(self):
+        """palette_similarity uses HSL path when no pixel_* keys."""
+        from variety.smart_selection.palette import palette_similarity
+
+        p1 = {'avg_hue': 30, 'avg_saturation': 0.8, 'avg_lightness': 0.5,
+               'color_temperature': 0.7}
+        p2 = {'avg_hue': 35, 'avg_saturation': 0.75, 'avg_lightness': 0.55,
+               'color_temperature': 0.6}
+
+        score = palette_similarity(p1, p2, use_oklab=False)
+        self.assertGreater(score, 0.8)
 
 
 if __name__ == '__main__':

@@ -220,8 +220,20 @@ def calculate_time_affinity(
         if image_palette.perceived_brightness is not None
         else (image_palette.avg_lightness if image_palette.avg_lightness is not None else 0.5)
     )
-    img_temperature = image_palette.color_temperature if image_palette.color_temperature is not None else 0.0
-    img_saturation = image_palette.avg_saturation if image_palette.avg_saturation is not None else 0.5
+    # Prefer pixel-derived temperature/saturation (distribution-aware)
+    # over palette-derived values (biased by k-means extraction)
+    img_temperature = (
+        image_palette.pixel_temperature
+        if image_palette.pixel_temperature is not None
+        else (image_palette.color_temperature if image_palette.color_temperature is not None else 0.0)
+    )
+    # pixel_chroma_median is on 0-~0.35 scale; normalize to 0-1 for comparison
+    if image_palette.pixel_chroma_median is not None:
+        img_saturation = min(1.0, image_palette.pixel_chroma_median / 0.20)
+    elif image_palette.avg_saturation is not None:
+        img_saturation = image_palette.avg_saturation
+    else:
+        img_saturation = 0.5
 
     # Calculate distance in each dimension
     lightness_diff = abs(float(img_lightness) - float(target_lightness))
@@ -283,18 +295,8 @@ def color_affinity_factor(
         return 0.8
 
     # Convert PaletteRecord to dict for similarity calculation
-    # Include both avg_* metrics (for HSL) and color values (for OKLAB)
-    img_palette = {
-        'avg_hue': image_palette.avg_hue,
-        'avg_saturation': image_palette.avg_saturation,
-        'avg_lightness': image_palette.avg_lightness,
-        'color_temperature': image_palette.color_temperature,
-    }
-    # Add color values for OKLAB similarity
-    for i in range(16):
-        color_attr = f'color{i}'
-        if hasattr(image_palette, color_attr):
-            img_palette[color_attr] = getattr(image_palette, color_attr)
+    # Include avg_*, pixel_*, and color values for all similarity paths
+    img_palette = image_palette.to_dict(include_metrics=True)
 
     # Calculate similarity (0.0 to 1.0)
     # Use OKLAB if configured (default True for perceptual accuracy)

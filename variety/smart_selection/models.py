@@ -112,6 +112,11 @@ class PaletteRecord:
     perceived_brightness: Optional[float] = None
     brightness_p10: Optional[float] = None
     brightness_p90: Optional[float] = None
+    pixel_warm_ratio: Optional[float] = None
+    pixel_chroma_median: Optional[float] = None
+    pixel_hue_entropy: Optional[float] = None
+    pixel_dominant_hue: Optional[float] = None
+    pixel_temperature: Optional[float] = None
     indexed_at: Optional[int] = None
 
     def to_dict(self, include_metrics: bool = False) -> Dict[str, str]:
@@ -139,7 +144,10 @@ class PaletteRecord:
         if include_metrics:
             for key in ('avg_hue', 'avg_saturation', 'avg_lightness',
                         'color_temperature', 'perceived_brightness',
-                        'brightness_p10', 'brightness_p90'):
+                        'brightness_p10', 'brightness_p90',
+                        'pixel_warm_ratio', 'pixel_chroma_median',
+                        'pixel_hue_entropy', 'pixel_dominant_hue',
+                        'pixel_temperature'):
                 value = getattr(self, key)
                 if value is not None:
                     result[key] = value

@@ -312,39 +312,162 @@ def parse_wallust_json(json_data) -> Dict[str, Any]:
     return result
 
 
-def _compute_perceived_brightness(image_path: str) -> Optional[Dict[str, float]]:
-    """Compute perceived brightness from image pixels using OKLAB L.
+def _hue_to_temperature(hue: float, chroma: float) -> float:
+    """Map an OKLAB hue angle to a temperature value.
 
-    Converts the image to OKLAB lightness (perceptually uniform) and computes
-    the median pixel value as the primary brightness signal, plus P10/P90
-    percentiles for range-based filtering.
+    Uses the OKLAB hue wheel where warm colors (reds, oranges, yellows)
+    span roughly 20-160 degrees and cool colors (blues, cyans) span
+    roughly 200-340 degrees.
+
+    Args:
+        hue: OKLAB hue angle in degrees (0-360).
+        chroma: Chroma magnitude — low chroma means neutral temperature.
+
+    Returns:
+        Temperature from -1.0 (cool) to +1.0 (warm).
+    """
+    # Low chroma = achromatic = neutral temperature
+    if chroma < 0.02:
+        return 0.0
+
+    # Map OKLAB hue to temperature
+    # Warm range: ~20-160 (reds, oranges, yellows)
+    # Cool range: ~200-340 (blues, cyans, purples)
+    # Transitions: 160-200, 340-20
+    if 20 <= hue <= 160:
+        # Warm zone — peak warmth around 60 (orange)
+        if hue <= 60:
+            temp = 0.7 + 0.3 * (hue - 20) / 40  # 0.7 to 1.0
+        elif hue <= 110:
+            temp = 1.0 - 0.3 * (hue - 60) / 50  # 1.0 to 0.7
+        else:
+            temp = 0.7 - 0.7 * (hue - 110) / 50  # 0.7 to 0.0
+    elif 200 <= hue <= 340:
+        # Cool zone — peak coolness around 270 (blue)
+        if hue <= 270:
+            temp = -0.3 - 0.7 * (hue - 200) / 70  # -0.3 to -1.0
+        else:
+            temp = -1.0 + 0.7 * (hue - 270) / 70  # -1.0 to -0.3
+    elif 160 < hue < 200:
+        # Warm→cool transition
+        temp = 0.0 - 0.3 * (hue - 160) / 40  # 0.0 to -0.3
+    else:
+        # 340 < hue or hue < 20: cool→warm transition
+        if hue >= 340:
+            temp = -0.3 + 1.0 * (hue - 340) / 40  # -0.3 to 0.7
+        else:
+            temp = 0.7  # hue < 20, deep red, warm
+
+    return max(-1.0, min(1.0, temp))
+
+
+def _compute_pixel_metrics(image_path: str) -> Optional[Dict[str, float]]:
+    """Compute distribution-aware color signals from image pixels.
+
+    Opens the image, thumbnails to 256x256, converts to OKLAB (L, a, b),
+    and computes brightness + chromatic signals. All operations are
+    vectorized numpy on ~65K pixels.
+
+    Signals computed:
+        - perceived_brightness: Median OKLAB L (0-1)
+        - brightness_p10/p90: 10th/90th percentile brightness
+        - pixel_warm_ratio: Chroma-weighted fraction of warm-hued pixels (0-1)
+        - pixel_chroma_median: Median pixel chroma (0-~0.35)
+        - pixel_hue_entropy: Shannon entropy of chroma-weighted 12-bin hue histogram
+        - pixel_dominant_hue: Center of highest chroma-weighted hue bin (0-360)
+        - pixel_temperature: Chroma-weighted circular mean hue → temperature (-1 to +1)
 
     Args:
         image_path: Path to the image file.
 
     Returns:
-        Dict with 'perceived_brightness', 'brightness_p10', 'brightness_p90'
-        (all 0.0-1.0 in OKLAB L), or None on failure.
+        Dict with all signal keys, or None on failure.
     """
     try:
         from PIL import Image
         import numpy as np
-        from variety.smart_selection.color_science import image_oklab_lightness
+        from variety.smart_selection.color_science import image_oklab_channels
 
         img = Image.open(image_path)
         img.thumbnail((256, 256))
         rgb_array = np.array(img.convert('RGB'))
 
-        L = image_oklab_lightness(rgb_array).flatten()
+        L, a, b = image_oklab_channels(rgb_array)
+        L_flat = L.flatten()
+        a_flat = a.flatten()
+        b_flat = b.flatten()
 
-        median_brightness = float(np.median(L))
-        p10 = float(np.percentile(L, 10))
-        p90 = float(np.percentile(L, 90))
+        # === Brightness signals (existing) ===
+        perceived_brightness = float(np.median(L_flat))
+        brightness_p10 = float(np.percentile(L_flat, 10))
+        brightness_p90 = float(np.percentile(L_flat, 90))
+
+        # === Chromatic signals ===
+        # Chroma per pixel
+        chroma = np.sqrt(a_flat**2 + b_flat**2)
+
+        # Hue per pixel (degrees, 0-360)
+        hue = np.degrees(np.arctan2(b_flat, a_flat)) % 360
+
+        # Only count chromatic pixels (chroma > ~0.02 JND threshold)
+        chromatic_mask = chroma > 0.02
+        chromatic_chroma = chroma[chromatic_mask]
+        chromatic_hue = hue[chromatic_mask]
+
+        # 1. Warm ratio — chroma-weighted fraction of warm-hued pixels
+        # OKLAB warm range: roughly hue 20-160 (reds through yellows)
+        if len(chromatic_chroma) > 0:
+            warm_mask = (chromatic_hue >= 20) & (chromatic_hue <= 160)
+            warm_ratio = float(np.sum(chromatic_chroma[warm_mask]) / np.sum(chromatic_chroma))
+        else:
+            warm_ratio = 0.5  # achromatic = neutral
+
+        # 2. Chroma median (over all pixels, not just chromatic)
+        chroma_median = float(np.median(chroma))
+
+        # 3. Hue entropy — Shannon entropy of chroma-weighted 12-bin histogram
+        bin_edges = np.linspace(0, 360, 13)
+        hist = np.zeros(12)
+        if len(chromatic_chroma) > 0:
+            # Use np.digitize for efficient binning
+            bin_indices = np.digitize(chromatic_hue, bin_edges) - 1
+            # Clip to valid range (handles edge case where hue == 360)
+            bin_indices = np.clip(bin_indices, 0, 11)
+            for i in range(12):
+                mask = bin_indices == i
+                hist[i] = np.sum(chromatic_chroma[mask])
+
+        total = hist.sum()
+        if total > 0:
+            probs = hist / total
+            probs = probs[probs > 0]
+            hue_entropy = float(-np.sum(probs * np.log(probs)))
+        else:
+            hue_entropy = 0.0
+
+        # 4. Dominant hue — center of highest chroma-weighted bin
+        dominant_bin = int(np.argmax(hist))
+        dominant_hue = float(bin_edges[dominant_bin] + 15)  # bin center
+
+        # 5. Pixel temperature — chroma-weighted circular mean → temperature
+        if len(chromatic_chroma) > 0:
+            weights = chromatic_chroma
+            sin_sum = float(np.sum(weights * np.sin(np.radians(chromatic_hue))))
+            cos_sum = float(np.sum(weights * np.cos(np.radians(chromatic_hue))))
+            mean_hue = float(np.degrees(np.arctan2(sin_sum, cos_sum))) % 360
+            pixel_temperature = _hue_to_temperature(mean_hue, float(chroma_median))
+        else:
+            pixel_temperature = 0.0
 
         return {
-            'perceived_brightness': median_brightness,
-            'brightness_p10': p10,
-            'brightness_p90': p90,
+            'perceived_brightness': perceived_brightness,
+            'brightness_p10': brightness_p10,
+            'brightness_p90': brightness_p90,
+            'pixel_warm_ratio': warm_ratio,
+            'pixel_chroma_median': chroma_median,
+            'pixel_hue_entropy': hue_entropy,
+            'pixel_dominant_hue': dominant_hue,
+            'pixel_temperature': pixel_temperature,
         }
     except Exception:
         return None
@@ -416,7 +539,7 @@ def _extract_palette_isolated(args: Tuple[str, str, str]) -> Tuple[str, Optional
                             json_data = json.load(f)
                         result = parse_wallust_json(json_data)
                         # Add PIL-based brightness from actual pixels
-                        brightness = _compute_perceived_brightness(image_path)
+                        brightness = _compute_pixel_metrics(image_path)
                         if brightness:
                             result.update(brightness)
                         return (image_path, result)
@@ -661,7 +784,7 @@ class PaletteExtractor:
                         logger.debug(f"Could not read raw palette: {e}")
 
                 # Add PIL-based perceived brightness from actual pixels
-                brightness = _compute_perceived_brightness(image_path)
+                brightness = _compute_pixel_metrics(image_path)
                 if brightness:
                     result.update(brightness)
 
@@ -914,6 +1037,11 @@ def create_palette_record(filepath: str, palette_data: Dict[str, Any]) -> Palett
         perceived_brightness=palette_data.get('perceived_brightness'),
         brightness_p10=palette_data.get('brightness_p10'),
         brightness_p90=palette_data.get('brightness_p90'),
+        pixel_warm_ratio=palette_data.get('pixel_warm_ratio'),
+        pixel_chroma_median=palette_data.get('pixel_chroma_median'),
+        pixel_hue_entropy=palette_data.get('pixel_hue_entropy'),
+        pixel_dominant_hue=palette_data.get('pixel_dominant_hue'),
+        pixel_temperature=palette_data.get('pixel_temperature'),
         indexed_at=int(time.time()),
     )
 
@@ -940,6 +1068,14 @@ def palette_similarity_hsl(palette1: Dict[str, Any], palette2: Dict[str, Any]) -
     """
     # Handle missing data
     if not palette1 or not palette2:
+        return 0.0
+
+    # If either palette lacks avg_* metrics, similarity is unknown (not "identical").
+    # Returning 0.0 prevents false matches when metrics are missing.
+    required_keys = ('avg_hue', 'avg_saturation', 'avg_lightness', 'color_temperature')
+    p1_has = any(palette1.get(k) is not None for k in required_keys)
+    p2_has = any(palette2.get(k) is not None for k in required_keys)
+    if not p1_has or not p2_has:
         return 0.0
 
     # Hue similarity (circular) - use 'or' to handle None values
@@ -987,6 +1123,85 @@ def palette_similarity_hsl(palette1: Dict[str, Any], palette2: Dict[str, Any]) -
     return max(0.0, min(1.0, similarity))
 
 
+def pixel_similarity(image_metrics: Dict[str, Any], theme_metrics: Dict[str, Any]) -> float:
+    """Compare image pixel signals against theme palette metrics.
+
+    Designed for asymmetric comparison: image signals are pixel-derived
+    (distribution-aware), theme signals are palette-derived (16 ANSI colors).
+
+    Components:
+    - Temperature match (0.40): pixel_temperature vs theme color_temperature
+    - Warm ratio directional match (0.30): does image warmth agree with theme?
+    - Chroma compatibility (0.15): pixel_chroma_median vs theme avg_saturation
+    - Hue entropy penalty (0.15): high-entropy images match any theme poorly
+
+    Args:
+        image_metrics: Dict with pixel_* keys from image.
+        theme_metrics: Dict with avg_* / color_temperature keys from theme.
+
+    Returns:
+        Similarity score 0.0 to 1.0.
+    """
+    # Get image pixel signals
+    pixel_temp = image_metrics.get('pixel_temperature')
+    warm_ratio = image_metrics.get('pixel_warm_ratio')
+    chroma_med = image_metrics.get('pixel_chroma_median')
+    hue_ent = image_metrics.get('pixel_hue_entropy')
+
+    # Get theme metrics
+    theme_temp = theme_metrics.get('color_temperature')
+    theme_sat = theme_metrics.get('avg_saturation')
+
+    # If we don't have the essential signals, fall back to unknown
+    if pixel_temp is None or theme_temp is None:
+        return 0.0
+
+    # 1. Temperature match (weight: 0.40)
+    # Both on -1 to +1 scale. Max difference = 2.
+    temp_diff = abs(pixel_temp - theme_temp)
+    temp_score = 1.0 - (temp_diff / 2.0)
+
+    # 2. Warm ratio directional match (weight: 0.30)
+    if warm_ratio is not None:
+        if theme_temp > 0.1:
+            # Warm theme: wants warm_ratio > 0.5
+            warm_score = min(1.0, warm_ratio * 2.0)  # 0.5 → 1.0
+        elif theme_temp < -0.1:
+            # Cool theme: wants warm_ratio < 0.5
+            warm_score = min(1.0, (1.0 - warm_ratio) * 2.0)  # 0.5 → 1.0
+        else:
+            # Neutral theme: anything is fine
+            warm_score = 1.0
+    else:
+        warm_score = 0.5  # unknown
+
+    # 3. Chroma compatibility (weight: 0.15)
+    if chroma_med is not None and theme_sat is not None:
+        # Normalize chroma_median (0-0.35) to 0-1 scale for comparison
+        normalized_chroma = min(1.0, chroma_med / 0.20)
+        chroma_score = 1.0 - abs(normalized_chroma - theme_sat)
+    else:
+        chroma_score = 0.5  # unknown
+
+    # 4. Hue entropy penalty (weight: 0.15)
+    # ln(12) ≈ 2.485 is max entropy for 12 bins
+    max_entropy = 2.485
+    if hue_ent is not None:
+        entropy_score = max(0.0, 1.0 - (hue_ent / max_entropy))
+    else:
+        entropy_score = 0.5  # unknown
+
+    # Weighted combination
+    similarity = (
+        0.40 * temp_score +
+        0.30 * warm_score +
+        0.15 * chroma_score +
+        0.15 * entropy_score
+    )
+
+    return max(0.0, min(1.0, similarity))
+
+
 def palette_similarity(
     palette1: Dict[str, Any],
     palette2: Dict[str, Any],
@@ -1014,6 +1229,16 @@ def palette_similarity(
     # Handle missing data
     if not palette1 or not palette2:
         return 0.0
+
+    # If either palette has pixel_* signals, use pixel_similarity for
+    # image→theme comparison. The palette with pixel_* is the image;
+    # the other is the theme.
+    p1_has_pixel = palette1.get('pixel_warm_ratio') is not None
+    p2_has_pixel = palette2.get('pixel_warm_ratio') is not None
+    if p1_has_pixel or p2_has_pixel:
+        img = palette1 if p1_has_pixel else palette2
+        theme = palette2 if p1_has_pixel else palette1
+        return pixel_similarity(img, theme)
 
     if use_oklab:
         # Extract colors for OKLAB comparison
