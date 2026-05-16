@@ -386,9 +386,34 @@ ALLOWED_TARGET_DIRS = [
 # config formats live at bare-$HOME paths (e.g. gtk2's gtkrc include
 # sidecar) and cannot be relocated under ~/.config. Keep this set small;
 # every entry is a security-touching exception to ALLOWED_TARGET_DIRS.
-ALLOWED_TARGET_FILES = frozenset({
-    os.path.realpath(os.path.expanduser("~/.gtkrc-2.0.mine")),
-})
+#
+# Security note: candidates that are symlinks at build time are REJECTED
+# (logged + skipped). Without this guard, a malicious symlink at e.g.
+# ~/.gtkrc-2.0.mine → /etc/passwd would, after realpath() resolution, put
+# /etc/passwd into the allowlist. Caught in the 2026-05-16 review pass.
+def _build_allowed_target_files():
+    """Construct ALLOWED_TARGET_FILES, skipping any current-symlink entry.
+
+    Returns:
+        frozenset of resolved absolute paths.
+    """
+    candidates = [
+        os.path.expanduser("~/.gtkrc-2.0.mine"),
+    ]
+    out = set()
+    for candidate in candidates:
+        if os.path.islink(candidate):
+            logger.warning(
+                "ALLOWED_TARGET_FILES candidate %s is a symlink — skipping to "
+                "prevent allowlist escalation via realpath resolution.",
+                candidate,
+            )
+            continue
+        out.add(os.path.realpath(candidate))
+    return frozenset(out)
+
+
+ALLOWED_TARGET_FILES = _build_allowed_target_files()
 
 
 # Allowlist of known safe reload command executables
@@ -463,9 +488,11 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
 
     # GTK2 sidecar — apps re-read rcfile on launch only
     "gtk2": None,
-    # Note: kdeglobals key is defined above in the Qt theming block — when
-    # P6 lands the kdeglobals template writes to ~/.local/share/color-schemes/Wallust.colors
-    # (Option C: separate scheme file), and KConfigWatcher propagates the change.
+    # Note: the kdeglobals key is defined above (Qt theming block, line ~438).
+    # Its template writes to ~/.local/share/color-schemes/Wallust.colors and
+    # user's ~/.config/kdeglobals references it via [General] ColorScheme=Wallust
+    # (Option C: separate scheme file preserves user's non-color sections).
+    # KConfigWatcher propagates the change to running KDE apps.
 }
 
 @dataclass

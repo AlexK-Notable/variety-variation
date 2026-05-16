@@ -188,6 +188,70 @@ class TestTargetPathSecurity:
         )
         assert engine._validate_target_path(target)
 
+    @pytest.mark.parametrize("near_miss_suffix", [
+        ".evil",      # adjacent suffix (existing scenario)
+        ".bak",       # backup extension
+        " ",          # trailing space
+        ".",          # trailing dot
+        "/foo",       # treated as directory parent
+    ])
+    def test_allowlist_near_miss_variants_rejected(self, engine, near_miss_suffix):
+        """Each suffixed variant of an allowed file path must reject. Guards
+        against an implementer switching from set-equality to startswith,
+        endswith, basename, or fnmatch — any of which would break this
+        property and re-introduce the bare-$HOME write vulnerability.
+        """
+        target = os.path.expanduser("~/.gtkrc-2.0.mine") + near_miss_suffix
+        assert not engine._validate_target_path(target), (
+            f"variant '...mine{near_miss_suffix}' was incorrectly accepted"
+        )
+
+    def test_allowlist_files_is_frozenset(self):
+        """ALLOWED_TARGET_FILES must be a frozenset, not a mutable set or
+        list. Documented as a security invariant in the module-level
+        comment; this test enforces it so a future refactor can't silently
+        downgrade the type and allow runtime mutation of the allowlist.
+        """
+        from variety.smart_selection.theming import ALLOWED_TARGET_FILES
+        assert isinstance(ALLOWED_TARGET_FILES, frozenset), (
+            f"ALLOWED_TARGET_FILES must be frozenset, got {type(ALLOWED_TARGET_FILES).__name__}"
+        )
+
+    def test_symlink_candidate_excluded_at_build_time(self, tmp_path, monkeypatch):
+        """If a candidate file is a symlink at module-build time,
+        _build_allowed_target_files() must skip it. Otherwise the realpath
+        resolution would put the symlink TARGET into the allowlist —
+        effectively letting any attacker who can place a symlink at
+        ~/.gtkrc-2.0.mine choose what variety is permitted to overwrite.
+
+        This test exercises the helper directly with a patched candidate
+        list rather than the module-load-time behavior.
+        """
+        from variety.smart_selection import theming
+
+        evil_target = tmp_path / "evil_target"
+        evil_target.write_text("attacker controls this file\n")
+
+        sidecar = tmp_path / ".gtkrc-2.0.mine"
+        sidecar.symlink_to(evil_target)
+        assert os.path.islink(str(sidecar))
+
+        # Patch the candidate list inside the builder via monkeypatched expanduser
+        original_expanduser = os.path.expanduser
+
+        def fake_expanduser(p):
+            if p == "~/.gtkrc-2.0.mine":
+                return str(sidecar)
+            return original_expanduser(p)
+
+        monkeypatch.setattr(theming.os.path, "expanduser", fake_expanduser)
+        result = theming._build_allowed_target_files()
+
+        # The symlink candidate must be skipped, so the target shouldn't be
+        # in the result.
+        assert str(evil_target) not in result
+        assert os.path.realpath(str(sidecar)) not in result
+
 
 class TestTemplateLoadingWithValidation:
     """Test that templates with invalid targets are rejected during loading."""
