@@ -377,6 +377,19 @@ ALLOWED_TARGET_DIRS = [
     "/tmp",
 ]
 
+# Files OUTSIDE the directory allowlist that are explicitly permitted as
+# template targets. Membership is checked by exact realpath equality — NOT
+# prefix — so adding `~/.gtkrc-2.0.mine` here does NOT grant access to
+# `~/.gtkrc-2.0.mine.evil` or any other adjacent path.
+#
+# This narrow file allowlist exists because a small number of legacy
+# config formats live at bare-$HOME paths (e.g. gtk2's gtkrc include
+# sidecar) and cannot be relocated under ~/.config. Keep this set small;
+# every entry is a security-touching exception to ALLOWED_TARGET_DIRS.
+ALLOWED_TARGET_FILES = frozenset({
+    os.path.realpath(os.path.expanduser("~/.gtkrc-2.0.mine")),
+})
+
 
 # Allowlist of known safe reload command executables
 SAFE_RELOAD_EXECUTABLES = {
@@ -442,6 +455,17 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     "launcher_panels": None,
     "ignomi": None,
     "zathura": None,
+
+    # System TUIs / CLI tools (re-read on launch / restart only)
+    "btop": None,
+    "micro": None,
+    "fastfetch": None,
+
+    # GTK2 sidecar — apps re-read rcfile on launch only
+    "gtk2": None,
+    # Note: kdeglobals key is defined above in the Qt theming block — when
+    # P6 lands the kdeglobals template writes to ~/.local/share/color-schemes/Wallust.colors
+    # (Option C: separate scheme file), and KConfigWatcher propagates the change.
 }
 
 @dataclass
@@ -864,6 +888,14 @@ class ThemeEngine:
             resolved = os.path.realpath(target_path)
         except (OSError, ValueError):
             return False
+
+        # Exact-path file allowlist — checked before the directory prefix
+        # check so a specific bare-$HOME file (e.g. ~/.gtkrc-2.0.mine) can
+        # be permitted without relaxing the directory allowlist itself.
+        # Uses set membership of realpath, not prefix, so adjacent paths
+        # like `.gtkrc-2.0.mine.evil` remain rejected.
+        if resolved in ALLOWED_TARGET_FILES:
+            return True
 
         # Must be under an allowed directory
         for allowed_dir in ALLOWED_TARGET_DIRS:

@@ -151,6 +151,43 @@ class TestTargetPathSecurity:
         target = str(evil_link / "passwd")
         assert not engine._validate_target_path(target)
 
+    def test_gtkrc_2_0_mine_allowed(self, engine):
+        """The bare-$HOME ~/.gtkrc-2.0.mine sidecar is explicitly permitted
+        via ALLOWED_TARGET_FILES so gtk2 templates can write it.
+        """
+        target = os.path.expanduser("~/.gtkrc-2.0.mine")
+        assert engine._validate_target_path(target)
+
+    def test_gtkrc_2_0_main_file_rejected(self, engine):
+        """The main ~/.gtkrc-2.0 file is NOT in the allowlist; only the
+        .mine sidecar is. Wallust must not blow away the user's primary
+        gtk2 rcfile.
+        """
+        target = os.path.expanduser("~/.gtkrc-2.0")
+        assert not engine._validate_target_path(target)
+
+    def test_allowlist_file_match_is_exact_not_prefix(self, engine):
+        """ALLOWED_TARGET_FILES uses set membership of realpath — a path
+        that prefix-matches an allowed file (e.g. .gtkrc-2.0.mine.evil)
+        must still be rejected. Prefix matching here would be a
+        re-introduction of the home-root vulnerability that
+        test_home_root_rejected guards against.
+        """
+        evil = os.path.expanduser("~/.gtkrc-2.0.mine.evil")
+        assert not engine._validate_target_path(evil)
+
+    def test_color_schemes_path_allowed(self, engine):
+        """KDE color-scheme files live under ~/.local/share/color-schemes/
+        which is covered by the existing ~/.local prefix in
+        ALLOWED_TARGET_DIRS — no new file allowlist entry needed.
+        Regression check that adding ALLOWED_TARGET_FILES didn't break
+        this code path.
+        """
+        target = os.path.expanduser(
+            "~/.local/share/color-schemes/Wallust.colors"
+        )
+        assert engine._validate_target_path(target)
+
 
 class TestTemplateLoadingWithValidation:
     """Test that templates with invalid targets are rejected during loading."""
