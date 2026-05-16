@@ -383,6 +383,7 @@ SAFE_RELOAD_EXECUTABLES = {
     "hyprctl", "swaymsg", "i3-msg", "killall", "polybar-msg",
     "pkill", "kill", "systemctl", "dbus-send", "makoctl",
     "kvantummanager", "dunst", "swaync-client", "gsettings",
+    "touch",
 }
 
 
@@ -394,7 +395,13 @@ DEFAULT_RELOADS: Dict[str, Optional[str]] = {
     "i3": "i3-msg reload",
 
     # Bars
-    "waybar": "killall -SIGUSR2 waybar",
+    # Waybar: touch the main style.css so waybar's `reload_style_on_change`
+    # inotify watch fires and triggers an in-place CSS reload via GtkCssProvider.
+    # SIGUSR2 would also reload, but it destroys+recreates the bar windows —
+    # visible flash that overlays fullscreen games. `-c` prevents creating an
+    # empty style.css if it doesn't exist. Users without `reload_style_on_change`
+    # can override via theming.json.
+    "waybar": "touch -c ~/.config/waybar/style.css",
     "polybar": "polybar-msg cmd restart",
 
     # Terminals (auto-reload on file change)
@@ -890,6 +897,67 @@ class ThemeEngine:
         except ValueError:
             return False
 
+    # Gaming-session detection: short-lived cache so back-to-back theme
+    # applies don't probe hyprctl/pgrep repeatedly.
+    _GAMING_CHECK_CACHE_TTL = 2.0  # seconds
+
+    def _is_gaming_session(self) -> bool:
+        """Return True if a fullscreen game / Steam app / gamescope is active.
+
+        Used by the reload pipeline to suppress disruptive reload commands
+        while the user is playing — see _run_reload_commands_async.
+        Template *writes* still happen so files are current when gaming ends;
+        only the reload signals are deferred (the next non-gaming wallpaper
+        change will pick them up).
+
+        Detection is best-effort and fails closed (returns False) on any
+        unexpected error so we never block reloads due to a probe failure.
+        """
+        now = time.monotonic()
+        cached = getattr(self, '_gaming_cache', None)
+        if cached is not None and (now - cached[0]) < self._GAMING_CHECK_CACHE_TTL:
+            return cached[1]
+
+        is_gaming = False
+
+        # gamescope (Steam Deck / gaming session compositor)
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "gamescope"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1.0,
+            )
+            if result.returncode == 0:
+                is_gaming = True
+        except Exception:
+            pass
+
+        # Hyprland window inspection — fullscreen window or Steam app class
+        if not is_gaming:
+            try:
+                result = subprocess.run(
+                    ["hyprctl", "clients", "-j"],
+                    capture_output=True,
+                    timeout=1.0,
+                    text=True,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    clients = json.loads(result.stdout)
+                    for client in clients:
+                        if client.get("fullscreen", 0) and client["fullscreen"] > 0:
+                            is_gaming = True
+                            break
+                        cls = client.get("class") or ""
+                        if cls.startswith("steam_app_"):
+                            is_gaming = True
+                            break
+            except Exception:
+                pass
+
+        self._gaming_cache = (now, is_gaming)
+        return is_gaming
+
     def _run_reload_command(self, command: str, template_name: str) -> None:
         """Run a reload command with timeout.
 
@@ -906,6 +974,9 @@ class ThemeEngine:
 
         try:
             args = shlex.split(command)
+            # Expand ~ in args — subprocess.run(shell=False) does no shell
+            # expansion, so a literal "~/.config/..." would not resolve.
+            args = [os.path.expanduser(a) for a in args]
             subprocess.run(
                 args,
                 shell=False,
@@ -926,11 +997,25 @@ class ThemeEngine:
     ) -> None:
         """Run reload commands in background thread with coalescing.
 
+        Skips all reload commands while a fullscreen game / Steam app /
+        gamescope is active so reload-triggered window operations don't
+        overlay the game. Template files are still written; only the
+        reload signals are suppressed.
+
         Args:
             reload_commands: List of (template_name, command) tuples.
         """
         self._reload_generation += 1
         generation = self._reload_generation
+
+        if self._is_gaming_session():
+            names = ", ".join(name for name, _ in reload_commands)
+            logger.info(
+                f"Gaming session detected — skipping reload commands "
+                f"for: {names}. Templates have been written; next "
+                f"non-gaming theme apply will fire the reloads."
+            )
+            return
 
         def runner():
             for name, command in reload_commands:
@@ -1126,8 +1211,9 @@ class ThemeEngine:
         if reload_commands:
             self._run_reload_commands_async(reload_commands)
 
-        # Toggle GTK theme to force CSS reload in all GTK apps
-        if gtk_dynamic_written:
+        # Toggle GTK theme to force CSS reload in all GTK apps.
+        # Skipped during a gaming session — see _is_gaming_session docstring.
+        if gtk_dynamic_written and not self._is_gaming_session():
             threading.Thread(target=self._reload_gtk_theme, daemon=True).start()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
