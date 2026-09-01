@@ -136,11 +136,15 @@ class DefaultDownloader(Downloader, metaclass=abc.ABCMeta):
                 )
                 return None
 
-            self.source.register_fill_queue()
             logger.info(lambda: "%s: Filling queue" % name)
             items = self.fill_queue()
             for item in items:
                 self.queue.append(item)
+
+            # Only count this fill against the rate limit if it produced results.
+            # Empty fills (e.g. niche search terms) shouldn't consume budget.
+            if self.queue:
+                self.source.register_fill_queue()
 
         if not self.queue:
             logger.info(lambda: "%s: Queue still empty after fill request" % name)

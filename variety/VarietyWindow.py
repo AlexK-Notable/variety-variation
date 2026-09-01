@@ -2073,7 +2073,7 @@ class VarietyWindow(Gtk.Window):
 
                     result = os.system(cmd)
                     if result == 0:  # success
-                        return target_file, mode
+                        return target_file, mode_data.set_wallpaper_param
                     else:
                         logger.warning(
                             lambda: "Could not execute auto-orient magick command. "
@@ -2083,7 +2083,7 @@ class VarietyWindow(Gtk.Window):
             return to_set, mode
         except Exception:
             logger.exception(lambda: "Could not apply display mode logic:")
-            return to_set
+            return to_set, "os"
 
     def apply_quote(self, to_set):
         try:
